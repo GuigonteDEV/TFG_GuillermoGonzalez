@@ -4,10 +4,7 @@ from pathlib import Path
 import pandas as pd
 from PIL import Image
 import numpy as np
-
-USE_TORCH = True
-if USE_TORCH:
-    import torch
+import torch
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')  
 DATA_DIR = ROOT / 'Dataset_Publico' / 'zoom_2_001'
@@ -112,68 +109,9 @@ def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, u
     labels_np = np.array(labels, dtype=np.float32)  
     meta_np = np.array(meta_rows, dtype=np.float32) if continuous_cols else None
 
-    if use_torch:
-        images_torch = torch.from_numpy(images_np).permute(0, 3, 1, 2).float() / 255.0
-        labels_torch = torch.from_numpy(labels_np)
-        meta_torch = torch.from_numpy(meta_np) if meta_np is not None else None
-        return images_torch, labels_torch, meta_torch, LABEL_COLUMNS, continuous_cols, missing_images
-    else:
-        return images_np, labels_np, meta_np, LABEL_COLUMNS, continuous_cols, missing_images
-
-if __name__ == '__main__':
-    df = load_csv(CSV_PATH)
-    images_tensor, labels_tensor, meta_tensor, label_cols, continuous_cols, missing = build_tensors(
-        df,
-        DATA_DIR,
-        target_size=TARGET_SIZE,
-        force_channels=FORCE_CHANNELS,
-        use_torch=USE_TORCH
-    )
-    print("Tamaño imágenes tensor:", images_tensor.shape)
-    print("Tamaño etiquetas tensor:", labels_tensor.shape)
-    if meta_tensor is not None:
-        print("Tamaño metadata continua:", meta_tensor.shape)
-    print("Columnas etiquetas:", label_cols)
-    if continuous_cols:
-        print("Columnas continuas:", continuous_cols)
-    if missing:
-        print(f"{len(missing)} imágenes faltantes / errores (primeros 10):", missing[:10])
-
-    out_dir = ROOT / 'processed'
-    out_dir.mkdir(exist_ok=True)
-    if USE_TORCH:
-        torch.save({
-            'images': images_tensor,
-            'labels': labels_tensor,
-            'meta_continuous': meta_tensor,
-            'label_cols': label_cols,
-            'continuous_cols': continuous_cols
-        }, out_dir / '001_tensor.pt')
-        print("Guardado en:", out_dir / '001_tensor.pt')
-    else:
-        np.save(out_dir / 'images.npy', images_tensor)
-        np.save(out_dir / 'labels.npy', labels_tensor)
-        if meta_tensor is not None:
-            np.save(out_dir / 'meta.npy', meta_tensor)
-        with open(out_dir / 'label_cols.txt', 'w') as f:
-            f.write('\n'.join(label_cols))
-        if continuous_cols:
-            with open(out_dir / 'continuous_cols.txt', 'w') as f:
-                f.write('\n'.join(continuous_cols))
-        print("Guardado en:", out_dir)
+    images_torch = torch.from_numpy(images_np).permute(0, 3, 1, 2).float() / 255.0
+    labels_torch = torch.from_numpy(labels_np)
+    meta_torch = torch.from_numpy(meta_np) if meta_np is not None else None
+    return images_torch, labels_torch, meta_torch, LABEL_COLUMNS, continuous_cols, missing_images
 
 
-#Comprobacion de la transformacion de la imagen, y su no destrucción
-
-from torchvision.transforms.functional import to_pil_image
-import matplotlib.pyplot as plt
-
-img_tensor = images_tensor[1]  # (3, H, W) con valores entre 0 y 1
-
-# Convertir a imagen PIL
-img = to_pil_image(img_tensor)  # esto reescala 0–1 → 0–255 automáticamente
-
-# Mostrar
-plt.imshow(img)
-plt.axis('off')
-plt.show()
