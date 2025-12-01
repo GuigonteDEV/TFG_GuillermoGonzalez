@@ -6,23 +6,22 @@ from PIL import Image
 import numpy as np
 import torch
 
-ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')  
-DATA_DIR = ROOT / 'Dataset_Publico' / 'zoom_2_001'
-CSV_PATH = DATA_DIR / '001_labels.csv'  
+
 LOCAL_FOLDER_NAME = 'zoom_2_001'  
 IMAGE_FOLDER_INSIDE = '001'  
-TARGET_SIZE = (256, 256)   
-FORCE_CHANNELS = 3         
+
 
 IGNORED_COLUMNS = ['burn_out_pct', 'low_saturation_pct', 'n_masks_for_slide']  
 FNAME_COL = 'fname'
 
-# Columnas de etiquetas binarias para CNN multilabel
-LABEL_COLUMNS = [
-    'highgrade_dysplasia', 'adenocarcinoma', 'suspicious_for_invasion',
-    'lymphovascular_invasion', 'inflammation', 'resection_edge', 
-    'tumor_necrosis', 'artifact', 'normal', 'lowgrade_dysplasia'
-]
+# Columnas de etiquetas de distinción entre TUMOR vs NO TUMOR
+TUMOR_COLUMNS = ['highgrade_dysplasia', 'adenocarcinoma', 'suspicious_for_invasion',
+            'lymphovascular_invasion', 'tumor_necrosis']
+
+NOTUMOR_COLUMNS = ['normal', 'lowgrade_dysplasia', 'inflammation']
+
+# Columnas de imagenes que se excluiran en el entrenamiento, no favorecen aprendizaje (no utiles)
+EXCLUDE_COLUMNS = ['artifact', 'resection_edge']
 
 # Columnas que queremos mantener aunque no sean etiquetas, ya se dropearan en el entrenamiento
 KEEP_COLUMNS = ['topleft_x', 'topleft_y']
@@ -54,13 +53,17 @@ def load_image_as_array(path, target_size=None, force_channels=3):
 
 def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, use_torch=True):
     images = []
-    labels = []
+    binary_labels = []
     meta_rows = []
     missing_images = []
-
+    
+    excl_art_resection = 0
+    excl_conflict = 0
+    excl_no_label = 0
+    
     # columnas continuas a mantener (solo KEEP_COLUMNS)
     continuous_cols = [c for c in df.columns if c in KEEP_COLUMNS]
-
+    
     for idx, row in df.iterrows():
         fname = str(row[FNAME_COL]).strip()
         parts = fname.split('/')
@@ -72,6 +75,34 @@ def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, u
         if not img_path.exists():
             missing_images.append((idx, str(img_path)))
             continue
+        
+        excluded_flag = False
+        for c in EXCLUDE_COLUMNS:
+            try:
+                if int(row.get(c, 0)) != 0:
+                    excl_art_resection += 1
+                    excluded_flag = True
+                    break
+            except:
+                # si valor no convertible, tratamos como 0
+                pass
+        if excluded_flag:
+            continue
+        
+        # etiquetas multilabel: vector de 0/1
+        
+        tumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in TUMOR_COLUMNS)
+        notumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in NOTUMOR_COLUMNS)
+        
+        # Las siguientes lineas es de comprobación de que esta todo OK
+        if tumor_present and notumor_present:
+            excl_conflict += 1
+            continue
+        
+        if not (tumor_present or notumor_present):
+            excl_no_label += 1
+            continue
+        
         try:
             arr = load_image_as_array(img_path, target_size, force_channels)
         except Exception as e:
@@ -79,19 +110,10 @@ def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, u
             missing_images.append((idx, str(img_path)))
             continue
         images.append(arr)
-
-        # etiquetas multilabel: vector de 0/1
-        label_vector = []
-        for c in LABEL_COLUMNS:
-            val = row[c]
-            try:
-                val_int = int(val)
-                val_int = 1 if val_int != 0 else 0
-            except:
-                val_int = 0
-            label_vector.append(val_int)
-        labels.append(label_vector)
-
+        
+        # etiqueta binaria: 1 si tumor_present, 0 si notumor_present
+        binary_labels.append(1 if tumor_present else 0)
+        
         # columnas continuas (KEEP_COLUMNS)
         meta_vector = []
         for c in continuous_cols:
@@ -101,17 +123,18 @@ def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, u
             except:
                 meta_vector.append(np.nan)
         meta_rows.append(meta_vector)
-
+        
     if len(images) == 0:
         raise RuntimeError("No se cargó ninguna imagen válida. Revisa paths y CSV.")
-
+    
     images_np = np.stack(images, axis=0)  
-    labels_np = np.array(labels, dtype=np.float32)  
+    labels_np = np.array(binary_labels, dtype=np.float32)  
     meta_np = np.array(meta_rows, dtype=np.float32) if continuous_cols else None
-
+    
     images_torch = torch.from_numpy(images_np).permute(0, 3, 1, 2).float() / 255.0
     labels_torch = torch.from_numpy(labels_np)
     meta_torch = torch.from_numpy(meta_np) if meta_np is not None else None
-    return images_torch, labels_torch, meta_torch, LABEL_COLUMNS, continuous_cols, missing_images
+    
+    return images_torch, labels_torch, meta_torch, continuous_cols, missing_images, excl_art_resection, excl_conflict, excl_no_label
 
 
