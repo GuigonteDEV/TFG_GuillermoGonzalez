@@ -7,10 +7,6 @@ import numpy as np
 import torch
 
 
-LOCAL_FOLDER_NAME = 'zoom_2_001'  
-IMAGE_FOLDER_INSIDE = '001'  
-
-
 IGNORED_COLUMNS = ['burn_out_pct', 'low_saturation_pct', 'n_masks_for_slide']  
 FNAME_COL = 'fname'
 
@@ -35,9 +31,6 @@ def load_csv(csv_path):
         raise ValueError(f"No existe columna '{FNAME_COL}' en {csv_path}")
     return df
 
-def Local_folder():
-    return LOCAL_FOLDER_NAME
-
 def load_image_as_array(path, target_size=None, force_channels=3):
     img = Image.open(path)
     if force_channels == 3:
@@ -51,7 +44,8 @@ def load_image_as_array(path, target_size=None, force_channels=3):
         arr = np.stack([arr]*3, axis=-1)
     return arr
 
-def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, use_torch=True):
+def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_channels=3, use_torch=True):
+    
     images = []
     binary_labels = []
     meta_rows = []
@@ -71,7 +65,7 @@ def build_tensors(df, dataset_publico_dir, target_size=None, force_channels=3, u
             tail = os.path.join(*parts[1:])
         else:
             tail = fname
-        img_path = dataset_publico_dir.parent / Local_folder() / tail
+        img_path = dataset_publico_dir.parent / f'zoom_2_00{n_slide}' / tail
         if not img_path.exists():
             missing_images.append((idx, str(img_path)))
             continue
