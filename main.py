@@ -8,6 +8,9 @@ Create_Tensor = True
 
 
 if Create_Tensor:
+    excl_art_resection_tot = 0
+    excl_conflict_tot = 0
+    excl_no_label_tot = 0
     for n_slide in range(1, 201):
         ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')  
         DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_00{n_slide}'
@@ -41,9 +44,16 @@ if Create_Tensor:
             'labels': labels_tensor,
             'meta_continuous': meta_tensor,
             'continuous_cols': continuous_cols
-        }, out_dir / '001_tensor.pt')
-        print("Guardado en:", out_dir / '001_tensor.pt')
+        }, out_dir / '00{n_slide}_tensor.pt')
+        print("Guardado en:", out_dir / '00{n_slide}_tensor.pt')
+        
+        excl_art_resection_tot += excl_art_resection
+        excl_conflict_tot += excl_conflict
+        excl_no_label_tot += excl_no_label
     
+    print(f'Número total exclusiones normales', excl_art_resection_tot)
+    print(f'Número total exclusiones conflictos:', excl_conflict_tot)
+    print(f'Número total exclusiones sin etiqueta:', excl_no_label_tot)
     
     
 #Comprobacion de la transformacion de la imagen, y su no destrucción
