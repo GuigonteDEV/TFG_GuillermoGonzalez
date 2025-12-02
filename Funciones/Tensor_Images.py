@@ -65,7 +65,7 @@ def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_cha
             tail = os.path.join(*parts[1:])
         else:
             tail = fname
-        img_path = dataset_publico_dir.parent / f'zoom_2_00{n_slide}' / tail
+        img_path = dataset_publico_dir.parent / f'zoom_2_{n_slide}' / tail
         if not img_path.exists():
             missing_images.append((idx, str(img_path)))
             continue

@@ -12,9 +12,10 @@ if Create_Tensor:
     excl_conflict_tot = 0
     excl_no_label_tot = 0
     for n_slide in range(1, 201):
+        n_slide_str = str(n_slide).zfill(3)
         ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')  
-        DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_00{n_slide}'
-        CSV_PATH = DATA_DIR / f'00{n_slide}_labels.csv'
+        DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
+        CSV_PATH = DATA_DIR / f'{n_slide_str}_labels.csv'
         TARGET_SIZE = (256, 256)   
         FORCE_CHANNELS = 3  
         
@@ -22,7 +23,7 @@ if Create_Tensor:
         images_tensor, labels_tensor, meta_tensor, continuous_cols, missing, excl_art_resection, excl_conflict, excl_no_label = build_tensors(
             df,
             DATA_DIR,
-            n_slide = n_slide,
+            n_slide = n_slide_str,
             target_size=TARGET_SIZE,
             force_channels=FORCE_CHANNELS,
             use_torch=True
@@ -44,8 +45,8 @@ if Create_Tensor:
             'labels': labels_tensor,
             'meta_continuous': meta_tensor,
             'continuous_cols': continuous_cols
-        }, out_dir / '00{n_slide}_tensor.pt')
-        print("Guardado en:", out_dir / '00{n_slide}_tensor.pt')
+        }, out_dir / f'{n_slide_str}_tensor.pt')
+        print("Guardado en:", out_dir / f'{n_slide_str}_tensor.pt')
         
         excl_art_resection_tot += excl_art_resection
         excl_conflict_tot += excl_conflict
