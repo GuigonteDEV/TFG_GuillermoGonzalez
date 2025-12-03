@@ -91,7 +91,8 @@ def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_cha
         # Las siguientes lineas es de comprobación de que esta todo OK
         if tumor_present and notumor_present:
             excl_conflict += 1
-            continue
+            
+            #continue
         
         if not (tumor_present or notumor_present):
             excl_no_label += 1
