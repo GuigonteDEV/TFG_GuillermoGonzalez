@@ -1,4 +1,20 @@
-# archivo: build_tensors_cnn_v2.py
+'''
+Docstring for Tensor_Images
+
+Construye los tensores con los que se alimentara la red neuronal a partir de las imagenes y archivo CSV del dataset.
+
+Los tensores son de tipo Torch y de la forma:
+
+· images_tensor: imagenes de los patch
+
+· labels_tensor: etiqueta de los patch
+
+· meta_continuous: informacion espacial de la imagen dentro de WSI global
+
+· continuous_cols: indica cual que columna es cual dentro de la informacion de continuas
+'''
+
+
 import os
 from pathlib import Path
 import pandas as pd

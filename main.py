@@ -60,6 +60,8 @@ if Create_Tensor:
 #Comprobacion de la transformacion de la imagen, y su no destrucción
 
 
+
+
 '''
 from torchvision.transforms.functional import to_pil_image
 import matplotlib.pyplot as plt
