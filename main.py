@@ -1,19 +1,19 @@
 from pathlib import Path
 import torch
 from Funciones.Tensor_Images import build_tensors, load_csv
-
-Create_Tensor = True
-
+from Funciones.Build_WSI import reconstruct, load_pt
 
 
+ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
+
+Create_Tensor = False
 
 if Create_Tensor:
     excl_art_resection_tot = 0
     excl_conflict_tot = 0
     excl_no_label_tot = 0
     for n_slide in range(1, 201):
-        n_slide_str = str(n_slide).zfill(3)
-        ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')  
+        n_slide_str = str(n_slide).zfill(3) 
         DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
         CSV_PATH = DATA_DIR / f'{n_slide_str}_labels.csv'
         TARGET_SIZE = (256, 256)   
@@ -30,8 +30,6 @@ if Create_Tensor:
         )
         print("Tamaño imágenes tensor:", images_tensor.shape)
         print("Tamaño etiquetas tensor:", labels_tensor.shape)
-        if meta_tensor is not None:
-            print("Tamaño metadata continua:", meta_tensor.shape)
         if missing:
             print(f"{len(missing)} imágenes faltantes / errores (primeros 10):", missing[:10])
         print(f'Número exclusiones normales:', excl_art_resection)
@@ -56,32 +54,22 @@ if Create_Tensor:
     print(f'Número total exclusiones conflictos:', excl_conflict_tot)
     print(f'Número total exclusiones sin etiqueta:', excl_no_label_tot)
     
+
+Create_WSI = True
+
+if Create_WSI:
+    INPUT_PATH = ROOT / 'processed' / '001_tensor.pt'
+    FILL_COLOR = 255
     
-#Comprobacion de la transformacion de la imagen, y su no destrucción
+    print("Cargando:", INPUT_PATH)
+    data = load_pt(INPUT_PATH)
+    WSI_Image, grid_shape, placed = reconstruct(data)
+    
+    out_dir = ROOT / 'WSI_Images'
+    out_dir.mkdir(exist_ok=True)
+    
+    WSI_Image.save(out_dir / '001_WSI.png')
+    
+    print(f"Reconstrucción guardada en: {out_dir / '001_WSI.png'}")
+    print(f"Rejilla (cols, rows): {grid_shape}, patches colocados: {placed}")
 
-
-
-
-'''
-from torchvision.transforms.functional import to_pil_image
-import matplotlib.pyplot as plt
-
-img_tensor = images_tensor[1]  # (3, H, W) con valores entre 0 y 1
-
-# Convertir a imagen PIL
-img = to_pil_image(img_tensor)  # esto reescala 0–1 → 0–255 automáticamente
-
-# Mostrar
-plt.imshow(img)
-plt.axis('off')
-plt.show()
-
-camino = out_dir / '001_tensor.pt'
-
-data = torch.load(camino)
-print(type(data))
-
-imgs = data["images"]
-print(imgs[0].shape)         # ejemplo
-print(imgs[0].min(), imgs[0].max())
-'''
