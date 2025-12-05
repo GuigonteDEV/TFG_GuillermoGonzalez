@@ -4,7 +4,7 @@ import os
 import sys
 import torch
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from torchvision.transforms.functional import to_pil_image
 
 
@@ -37,6 +37,8 @@ def reconstruct(data):
         raise KeyError("El .pt debe contener 'meta_continuous' con las coordenadas topleft_x/topleft_y")
     imgs = images_to_numpy(data['images'])  # (N,H,W,3)
     meta = data['meta_continuous']
+    label = data['labels']
+    
     # coords
     coords = meta.detach().cpu().numpy()
     
@@ -54,9 +56,11 @@ def reconstruct(data):
     canvas_h = n_rows * H
 
     canvas = Image.new('RGB', (canvas_w, canvas_h), color= (255,255,255)) #Fill que sea Blanco
+    canvas_map = Image.new('RGB', (canvas_w, canvas_h), color= (255,255,255))
     x_to_col = {v: i for i, v in enumerate(unique_x_sorted)}
     y_to_row = {v: i for i, v in enumerate(unique_y_sorted)}
-
+    
+    pixels = canvas_map.load()
     placed = 0
     for i in range(N):
         px, py = xs[i], ys[i]
@@ -68,9 +72,22 @@ def reconstruct(data):
         
         patch_img = to_pil_image(imgs[i])
         canvas.paste(patch_img, (left, top))
+        
+        color = (255, 0, 0) if label[i].item() == 1.0 else (0, 255, 0)
+        # Dibujar un rectángulo con el color, rellenando todo el patch
+        ImageDraw.Draw(canvas_map).rectangle([left, top, left + W - 1, top + H - 1], fill=color, outline=None)
+        
         placed += 1
     
-    return canvas, (n_cols, n_rows), placed
+    canvas = canvas.convert("RGBA")
+    canvas_map = canvas_map.convert("RGBA")
+    
+    alpha = 100  # 0-255
+    canvas_map.putalpha(alpha)
+    
+    canvas_combined = Image.alpha_composite(canvas, canvas_map)
+    
+    return canvas, canvas_combined, (n_cols, n_rows), placed
 
 
 

@@ -63,12 +63,13 @@ if Create_WSI:
     
     print("Cargando:", INPUT_PATH)
     data = load_pt(INPUT_PATH)
-    WSI_Image, grid_shape, placed = reconstruct(data)
+    WSI_Image, WSI_Map, grid_shape, placed = reconstruct(data)
     
     out_dir = ROOT / 'WSI_Images'
     out_dir.mkdir(exist_ok=True)
     
     WSI_Image.save(out_dir / '001_WSI.png')
+    WSI_Map.save(out_dir / '001_WSI_Map.png')
     
     print(f"Reconstrucción guardada en: {out_dir / '001_WSI.png'}")
     print(f"Rejilla (cols, rows): {grid_shape}, patches colocados: {placed}")
