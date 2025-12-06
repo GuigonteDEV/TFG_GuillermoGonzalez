@@ -67,6 +67,8 @@ def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_cha
     meta_rows = []
     missing_images = []
     
+    tumor_tot = 0
+    no_tumor_tot = 0
     excl_art_resection = 0
     excl_conflict = 0
     excl_no_label = 0
@@ -135,6 +137,11 @@ def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_cha
                 meta_vector.append(np.nan)
         meta_rows.append(meta_vector)
         
+        if tumor_present:
+            tumor_tot += 1
+        else:
+            no_tumor_tot += 1
+        
     if len(images) == 0:
         raise RuntimeError("No se cargó ninguna imagen válida. Revisa paths y CSV.")
     
@@ -146,6 +153,6 @@ def build_tensors(df, dataset_publico_dir, n_slide,  target_size=None, force_cha
     labels_torch = torch.from_numpy(labels_np)
     meta_torch = torch.from_numpy(meta_np) if meta_np is not None else None
     
-    return images_torch, labels_torch, meta_torch, continuous_cols, missing_images, excl_art_resection, excl_conflict, excl_no_label
+    return images_torch, labels_torch, meta_torch, continuous_cols, missing_images, excl_art_resection, excl_conflict, excl_no_label, tumor_tot, no_tumor_tot
 
 
