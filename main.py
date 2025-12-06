@@ -6,7 +6,13 @@ from Funciones.Build_WSI import reconstruct, load_pt
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
 
-Create_Tensor = True
+Create_Tensor = False
+
+Create_WSI = False
+
+Create_Statistics = True
+
+
 
 if Create_Tensor:
     excl_art_resection_tot = 0
@@ -65,8 +71,6 @@ if Create_Tensor:
     print(f'Número total patches tumor:', tumor_tot)
     print(f'Número total patches no tumor', no_tumor_tot)
     
-
-Create_WSI = True
 
 if Create_WSI:
     for n_slide in range(1,201):
