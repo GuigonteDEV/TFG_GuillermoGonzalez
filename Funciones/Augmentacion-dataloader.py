@@ -124,6 +124,12 @@ class PatchesDataset(Dataset):
 
         return image, label
 
+# ---------------------------
+# Creación subset
+# ---------------------------
+
+subset_train_idx = train_idx[:int(len(train_idx) * 0.3)]
+subset_val_idx = val_idx[:int(len(val_idx) * 0.3)]
 
 # ---------------------------
 # Generación Dataset train / val
@@ -133,10 +139,8 @@ pt_files = list(PT_DIR.glob("*.pt"))
 
 pt_files = np.array(pt_files)
 
-print(pt_files)
-
-train_files = pt_files[train_idx]
-val_files = pt_files[val_idx]
+train_files = pt_files[subset_train_idx]
+val_files = pt_files[subset_val_idx]
 
 def generate_dataset(files):
     all_images = []
@@ -157,26 +161,20 @@ val_images, val_labels = generate_dataset(val_files)
 train_dataset = PatchesDataset(train_images, train_labels, transform=train_transforms)
 val_dataset = PatchesDataset(val_images, val_labels, transform=val_transforms)
 
-
-'''
-
 # ---------------------------
 # WeightedRandomSampler para train
 # ---------------------------
-train_labels = all_labels[train_idx].numpy()
 class_counts = np.bincount(train_labels)
 class_weights = 1.0 / class_counts
 sample_weights = class_weights[train_labels]
 
-train_sampler = WeightedRandomSampler(weights=sample_weights,
-num_samples=len(sample_weights),
-replacement=True)
+train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = len(sample_weights), replacement = True)
 
 # ---------------------------
 # DataLoaders
 # ---------------------------
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler, num_workers=4)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler, num_workers = 4)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4)
 
 # ---------------------------
 # Ejemplo de iteración
@@ -186,4 +184,3 @@ if __name__ == "__main__":
         print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
         if batch_idx == 1:
             break
-'''
