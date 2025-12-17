@@ -8,7 +8,9 @@ import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 from torchvision.transforms.functional import to_pil_image
+from sklearn.model_selection import StratifiedShuffleSplit
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 
@@ -16,12 +18,74 @@ from sklearn.model_selection import train_test_split
 # Configuración general
 # ---------------------------
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
+CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
 PT_DIR = ROOT / 'processed' 
 BATCH_SIZE = 32
 IMAGE_SIZE = 256  
 RANDOM_SEED = 42
+VAL_FRACTION = 0.15
+
+# ---------------------------
+# Division Dataset No Leakage
+# ---------------------------
+
+df = pd.read_csv(CSV_PATH)
+
+has_tumor = df['has_tumor']
+tumor_patches = df['tumor_patches']
+no_tumor_patches = df['no_tumor_patches']
+tot_patches = df['total_patches']
+paths_WSI = df['wsi_path']
 
 
+strat_labels = np.array(has_tumor.to_numpy())
+
+sss = StratifiedShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=RANDOM_SEED)
+train_idx, val_idx = next(sss.split(paths_WSI, strat_labels))
+
+'''
+paths = []
+for i in range(len(paths_WSI)):
+    name_path = paths_WSI[i]
+    paths.append(PT_DIR / name_path)
+    
+paths = np.array(paths)
+    
+
+train_files = paths[train_idx].tolist()
+val_files = paths[val_idx].tolist()'''
+
+# calcular patch-level distribuciones iniciales
+
+def summarize_file_list(idx, tot_patches, tumor_patches, no_tumor_patches):
+    tot_patches = np.array(tot_patches.to_numpy())
+    tumor_patches = np.array(tumor_patches.to_numpy())
+    no_tumor_patches = np.array(no_tumor_patches.to_numpy())
+    patches = int(tot_patches[idx].sum())
+    tumors = int(tumor_patches[idx].sum())
+    notumors = int(no_tumor_patches[idx].sum())
+    
+    return patches, tumors, notumors
+    
+'''
+def summarize_file_list(file_list):
+    imgs = 0; tumors = 0; notumors = 0
+    for f in file_list:
+        d = torch.load(f, map_location="cpu")
+        labs = d['labels']
+        imgs += int(labs.numel())
+        tumors += int((labs==1).sum().item())
+        notumors += int((labs==0).sum().item())
+    return imgs, tumors, notumors'''
+
+train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx, tot_patches, tumor_patches, no_tumor_patches)
+val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx, tot_patches, tumor_patches, no_tumor_patches)
+
+print("Split inicial:")
+print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
+print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
+
+'''
 # ---------------------------
 # Dataset PyTorch
 # ---------------------------
@@ -126,3 +190,4 @@ if __name__ == "__main__":
         print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
         if batch_idx == 1:
             break
+'''

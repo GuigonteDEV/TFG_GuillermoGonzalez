@@ -10,8 +10,6 @@ Create_Tensor = False
 
 Create_WSI = False
 
-Create_Statistics = True
-
 
 
 if Create_Tensor:
