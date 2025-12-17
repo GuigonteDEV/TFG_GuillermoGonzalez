@@ -123,42 +123,42 @@ class PatchesDataset(Dataset):
             image = self.transform(image)
 
         return image, label
-    
-    
-
-
-'''
 
 
 # ---------------------------
-# Dividir train / val (estratificado)
+# Generación Dataset train / val
 # ---------------------------
-Posible_Leakage = True
 
-if Posible_Leakage:
-    
-    pt_files = list(PT_DIR.glob("*.pt"))
+pt_files = list(PT_DIR.glob("*.pt"))
+
+pt_files = np.array(pt_files)
+
+print(pt_files)
+
+train_files = pt_files[train_idx]
+val_files = pt_files[val_idx]
+
+def generate_dataset(files):
     all_images = []
     all_labels = []
-
-    for f in pt_files:
+    for f in files:
         data = torch.load(f)
         all_images.append(data['images'])  # [N, C, H, W]
         all_labels.append(data['labels'])  # [N]
-
-    # Concatenar todos los patches
+    
     all_images = torch.cat(all_images, dim=0)
     all_labels = torch.cat(all_labels, dim=0)
     
-    train_idx, val_idx = train_test_split(
-        np.arange(len(all_labels)),
-        test_size=0.15,
-        stratify=all_labels.numpy(),
-        random_state=RANDOM_SEED
-    )
+    return all_images, all_labels
 
-train_dataset = PatchesDataset(all_images[train_idx], all_labels[train_idx], transform=train_transforms)
-val_dataset = PatchesDataset(all_images[val_idx], all_labels[val_idx], transform=val_transforms)
+train_images, train_labels = generate_dataset(train_files)
+val_images, val_labels = generate_dataset(val_files)
+        
+train_dataset = PatchesDataset(train_images, train_labels, transform=train_transforms)
+val_dataset = PatchesDataset(val_images, val_labels, transform=val_transforms)
+
+
+'''
 
 # ---------------------------
 # WeightedRandomSampler para train
