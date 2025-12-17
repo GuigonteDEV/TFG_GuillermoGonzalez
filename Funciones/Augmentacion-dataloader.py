@@ -29,35 +29,33 @@ VAL_FRACTION = 0.15
 # Division Dataset No Leakage
 # ---------------------------
 
-df = pd.read_csv(CSV_PATH)
+#Leer el CSV con info de WSI
 
-has_tumor = df['has_tumor']
-tumor_patches = df['tumor_patches']
-no_tumor_patches = df['no_tumor_patches']
-tot_patches = df['total_patches']
-paths_WSI = df['wsi_path']
+def Read_CSV(CSV_PATH):
+
+    df = pd.read_csv(CSV_PATH)
+
+    has_tumor = df['has_tumor']
+    tumor_patches = df['tumor_patches']
+    no_tumor_patches = df['no_tumor_patches']
+    tot_patches = df['total_patches']
+    paths_WSI = df['wsi_path']
 
 
-strat_labels = np.array(has_tumor.to_numpy())
+    strat_labels = np.array(has_tumor.to_numpy())
+    
+    return strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI
+
+strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI = Read_CSV(CSV_PATH)
+
+#División stratificada de val y train
 
 sss = StratifiedShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=RANDOM_SEED)
 train_idx, val_idx = next(sss.split(paths_WSI, strat_labels))
 
-'''
-paths = []
-for i in range(len(paths_WSI)):
-    name_path = paths_WSI[i]
-    paths.append(PT_DIR / name_path)
-    
-paths = np.array(paths)
-    
-
-train_files = paths[train_idx].tolist()
-val_files = paths[val_idx].tolist()'''
-
 # calcular patch-level distribuciones iniciales
 
-def summarize_file_list(idx, tot_patches, tumor_patches, no_tumor_patches):
+def summarize_file_list(idx, tot_patches = tot_patches, tumor_patches = tumor_patches, no_tumor_patches = no_tumor_patches):
     tot_patches = np.array(tot_patches.to_numpy())
     tumor_patches = np.array(tumor_patches.to_numpy())
     no_tumor_patches = np.array(no_tumor_patches.to_numpy())
@@ -66,24 +64,42 @@ def summarize_file_list(idx, tot_patches, tumor_patches, no_tumor_patches):
     notumors = int(no_tumor_patches[idx].sum())
     
     return patches, tumors, notumors
-    
-'''
-def summarize_file_list(file_list):
-    imgs = 0; tumors = 0; notumors = 0
-    for f in file_list:
-        d = torch.load(f, map_location="cpu")
-        labs = d['labels']
-        imgs += int(labs.numel())
-        tumors += int((labs==1).sum().item())
-        notumors += int((labs==0).sum().item())
-    return imgs, tumors, notumors'''
 
-train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx, tot_patches, tumor_patches, no_tumor_patches)
-val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx, tot_patches, tumor_patches, no_tumor_patches)
+train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx)
+val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx)
 
 print("Split inicial:")
 print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
 print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
+
+
+# ---------------------------
+# Definir augmentations on-the-fly
+# ---------------------------
+
+train_transforms = transforms.Compose([
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    transforms.RandomRotation(90),
+    transforms.RandomHorizontalFlip(p = 0.5),
+    transforms.RandomVerticalFlip(p = 0.5),
+    transforms.RandomApply([
+        transforms.GaussianBlur(kernel_size = 3, sigma = (0.1, 0.5)), 
+    ], p = 0.2),
+    transforms.RandomApply([
+        transforms.ColorJitter(
+            brightness = (0.9, 1.1),
+            contrast = (0.9, 1.1)
+            ), 
+    ], p = 0.3),
+    transforms.ToTensor(),
+    transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229,0.224,0.225])
+])
+
+val_transforms = transforms.Compose([
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229,0.224,0.225])
+])
 
 '''
 # ---------------------------
@@ -109,29 +125,7 @@ class PatchesDataset(Dataset):
         return image, label
 
 
-# ---------------------------
-# Definir augmentations on-the-fly
-# ---------------------------
 
-train_transforms = transforms.Compose([
-    transforms.RandomRotation([0, 90, 180, 270]),
-    transforms.RandomHorizontalFlip(p=0.5),
-    transforms.RandomVerticalFlip(p=0.5),
-    transforms.ColorJitter(
-        brightness=(0.7, 1.3),
-        contrast=(0.7, 1.3)
-    ),
-    transforms.ToTensor(),
-    transforms.GaussianNoise(sigma=0.1),  
-    transforms.GaussianBlur(kernel_size=3, sigma=0.1),  
-    transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
-])
-
-val_transforms = transforms.Compose([
-    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
-])
 
 
 # ---------------------------
