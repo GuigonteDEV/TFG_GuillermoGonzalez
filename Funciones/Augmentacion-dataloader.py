@@ -101,31 +101,33 @@ val_transforms = transforms.Compose([
     transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229,0.224,0.225])
 ])
 
-'''
 # ---------------------------
 # Dataset PyTorch
 # ---------------------------
+
 class PatchesDataset(Dataset):
     def __init__(self, images_tensor, labels_tensor, transform=None):
-        self.images = images_tensor  # [N, C, H, W]
-        self.labels = labels_tensor  # [N]
+        self.images = images_tensor
+        self.labels = labels_tensor
         self.transform = transform
 
     def __len__(self):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        image = self.images[idx]
+        image = self.images[idx].clone()
         label = self.labels[idx]
 
         if self.transform:
-            # torchvision transforma PIL, así que convertimos temporalmente
             image = to_pil_image(image)
             image = self.transform(image)
+
         return image, label
+    
+    
 
 
-
+'''
 
 
 # ---------------------------
@@ -155,8 +157,8 @@ if Posible_Leakage:
         random_state=RANDOM_SEED
     )
 
-    train_dataset = PatchesDataset(all_images[train_idx], all_labels[train_idx], transform=train_transforms)
-    val_dataset = PatchesDataset(all_images[val_idx], all_labels[val_idx], transform=val_transforms)
+train_dataset = PatchesDataset(all_images[train_idx], all_labels[train_idx], transform=train_transforms)
+val_dataset = PatchesDataset(all_images[val_idx], all_labels[val_idx], transform=val_transforms)
 
 # ---------------------------
 # WeightedRandomSampler para train
