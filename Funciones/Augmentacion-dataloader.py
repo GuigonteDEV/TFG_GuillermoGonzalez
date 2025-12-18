@@ -33,6 +33,10 @@ VAL_FRACTION = 0.15
 
 #Leer el CSV con info de WSI
 
+def rotate_90(img):
+    angle = random.choice([0, 90, 180, 270])
+    return transforms.functional.rotate(img, angle)
+
 def Read_CSV(CSV_PATH):
 
     df = pd.read_csv(CSV_PATH)
@@ -77,7 +81,7 @@ val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx)
 
 train_transforms = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    transforms.RandomRotation([0, 90, 180, 270])
+    transforms.Lambda(rotate_90),
     transforms.RandomHorizontalFlip(p = 0.5),
     transforms.RandomVerticalFlip(p = 0.5),
     transforms.RandomApply([
