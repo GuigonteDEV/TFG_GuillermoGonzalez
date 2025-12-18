@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+import random
 
 # ---------------------------
 # Configuración general
@@ -68,10 +70,6 @@ def summarize_file_list(idx, tot_patches = tot_patches, tumor_patches = tumor_pa
 train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx)
 val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx)
 
-print("Split inicial:")
-print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
-print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
-
 
 # ---------------------------
 # Definir augmentations on-the-fly
@@ -79,7 +77,7 @@ print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
 
 train_transforms = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    transforms.RandomRotation(90),
+    transforms.RandomRotation([0, 90, 180, 270])
     transforms.RandomHorizontalFlip(p = 0.5),
     transforms.RandomVerticalFlip(p = 0.5),
     transforms.RandomApply([
@@ -160,8 +158,6 @@ class LazyPatchDataset(Dataset):
             image = to_pil_image(image)
             image = self.transform(image)
         
-        print('Image')
-
         return image, label
 
 # ---------------------------
@@ -173,10 +169,6 @@ subset_val_idx = val_idx[:int(len(val_idx) * 0.1)]
 
 train_imgs, train_tumors, train_notumors = summarize_file_list(subset_train_idx)
 val_imgs, val_tumors, val_notumors = summarize_file_list(subset_val_idx)
-
-print("Split inicial:")
-print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
-print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
 
 # ---------------------------
 # Generación Dataset train / val
@@ -236,7 +228,41 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, n
 # Ejemplo de iteración
 # ---------------------------
 if __name__ == "__main__":
+    
+    print("Split inicial:")
+    print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
+    print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
+    
+    print("Split subset:")
+    print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
+    print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
+    
+    # coger un batch
+    images, labels = next(iter(train_loader))
+
+    # seleccionar 10 índices aleatorios del batch
+    idxs = random.sample(range(images.size(0)), 10)
+
+    # desnormalizar (para que se vean bien)
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
+    std  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
+
+    plt.figure(figsize=(15, 6))
+
+    for i, idx in enumerate(idxs):
+        img = images[idx].cpu() * std + mean
+        img = img.clamp(0, 1)
+
+        plt.subplot(2, 5, i + 1)
+        plt.imshow(img.permute(1, 2, 0))
+        plt.title(f"Label: {labels[idx].item()}")
+        plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+    
     for batch_idx, (images, labels) in enumerate(train_loader):
         print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
+        print(f"Número de patches tumor: {(labels == 1).sum().item()}")
         if batch_idx == 1:
             break
