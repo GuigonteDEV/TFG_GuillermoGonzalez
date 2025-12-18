@@ -104,7 +104,7 @@ val_transforms = transforms.Compose([
 # ---------------------------
 # Dataset PyTorch
 # ---------------------------
-
+'''
 class PatchesDataset(Dataset):
     def __init__(self, images_tensor, labels_tensor, transform=None):
         self.images = images_tensor
@@ -123,13 +123,60 @@ class PatchesDataset(Dataset):
             image = self.transform(image)
 
         return image, label
+'''
+
+# ---------------------------
+# Dataset PyTorch Lazy
+# ---------------------------
+class LazyPatchDataset(Dataset):
+    def __init__(self, pt_files, transform=None):
+        self.pt_files = list(pt_files)
+        self.transform = transform
+
+        self.index = []   # [(pt_path, patch_idx), ...]
+        self.labels = []
+
+        for pt_path in self.pt_files:
+            data = torch.load(pt_path, map_location="cpu")
+            n_patches = data["labels"].shape[0]
+
+            for i in range(n_patches):
+                self.index.append((pt_path, i))
+                self.labels.append(int(data["labels"][i]))
+
+        self.labels = np.array(self.labels)
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        pt_path, patch_idx = self.index[idx]
+
+        data = torch.load(pt_path, map_location="cpu")
+        image = data["images"][patch_idx]
+        label = data["labels"][patch_idx]
+
+        if self.transform:
+            image = to_pil_image(image)
+            image = self.transform(image)
+        
+        print('Image')
+
+        return image, label
 
 # ---------------------------
 # Creación subset
 # ---------------------------
 
-subset_train_idx = train_idx[:int(len(train_idx) * 0.3)]
-subset_val_idx = val_idx[:int(len(val_idx) * 0.3)]
+subset_train_idx = train_idx[:int(len(train_idx) * 0.1)]
+subset_val_idx = val_idx[:int(len(val_idx) * 0.1)]
+
+train_imgs, train_tumors, train_notumors = summarize_file_list(subset_train_idx)
+val_imgs, val_tumors, val_notumors = summarize_file_list(subset_val_idx)
+
+print("Split inicial:")
+print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
+print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
 
 # ---------------------------
 # Generación Dataset train / val
@@ -142,6 +189,8 @@ pt_files = np.array(pt_files)
 train_files = pt_files[subset_train_idx]
 val_files = pt_files[subset_val_idx]
 
+#No lazy
+'''
 def generate_dataset(files):
     all_images = []
     all_labels = []
@@ -160,13 +209,20 @@ val_images, val_labels = generate_dataset(val_files)
         
 train_dataset = PatchesDataset(train_images, train_labels, transform=train_transforms)
 val_dataset = PatchesDataset(val_images, val_labels, transform=val_transforms)
+'''
+
+#Lazy
+
+train_dataset = LazyPatchDataset(train_files, transform = train_transforms)
+val_dataset = LazyPatchDataset(val_files, transform = val_transforms)
 
 # ---------------------------
 # WeightedRandomSampler para train
 # ---------------------------
-class_counts = np.bincount(train_labels)
+
+class_counts = np.bincount(train_dataset.labels)
 class_weights = 1.0 / class_counts
-sample_weights = class_weights[train_labels]
+sample_weights = class_weights[train_dataset.labels]
 
 train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = len(sample_weights), replacement = True)
 
@@ -174,7 +230,7 @@ train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = le
 # DataLoaders
 # ---------------------------
 train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler, num_workers = 4)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 2)
 
 # ---------------------------
 # Ejemplo de iteración
