@@ -5,6 +5,11 @@ from torch.utils.data import DataLoader
 import time as time
 import matplotlib.pyplot as plt
 import random
+from torchvision import models
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
 from Funciones.Tensor_Images import build_tensors, load_csv
 from Funciones.Build_WSI import reconstruct, load_pt
 from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_list, Transforms, LazyPatchDataset, WeightedSampler
@@ -235,3 +240,24 @@ if __name__ == "__main__":
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"\nTiempo de entrenamiento: {elapsed_time:.4f} segundos")
+    
+
+
+################################
+# ---------------------------
+# Implementación Modelo + Entrenamiento
+# ---------------------------
+################################
+
+# ---------------------------
+# Modelo ResNet18
+# ---------------------------
+class ResNet18(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = models.resnet18(pretrained=False)
+        in_features = self.backbone.fc.in_features
+        self.backbone.fc = nn.Linear(in_features, 1)  # salida escalar
+
+    def forward(self, x):
+        return self.backbone(x) 
