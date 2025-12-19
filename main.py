@@ -197,6 +197,7 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
 # ---------------------------
 # Ejemplo de iteración
 # ---------------------------
+'''
 if __name__ == "__main__":
     
     print("Split inicial:")
@@ -241,13 +242,15 @@ if __name__ == "__main__":
     elapsed_time = end_time - start_time
     print(f"\nTiempo de entrenamiento: {elapsed_time:.4f} segundos")
     
-
+'''
 
 ################################
 # ---------------------------
 # Implementación Modelo + Entrenamiento
 # ---------------------------
 ################################
+
+epochs = 2
 
 # ---------------------------
 # Modelo ResNet18
@@ -261,3 +264,77 @@ class ResNet18(nn.Module):
 
     def forward(self, x):
         return self.backbone(x) 
+    
+
+def train_loop(dataloader, model, loss_fn, optimizer, device):
+    model.train()
+    losses, accs = [], []
+
+    for X, y in tqdm(dataloader):
+        X, y = X.to(device), y.float().to(device)
+
+        optimizer.zero_grad()
+        logits = model(X).squeeze(1)
+        loss = loss_fn(logits, y)
+        loss.backward()
+        optimizer.step()
+
+        losses.append(loss.item())
+
+        probs = torch.sigmoid(logits)
+        preds = (probs > 0.5).float()
+        acc = (preds == y).float().mean()
+        accs.append(acc.item())
+        
+    scheduler.step(np.mean(losses))
+
+    return np.mean(losses), np.mean(accs)
+
+
+def val_loop(dataloader, model, loss_fn, device):
+    model.eval()
+    losses, accs = [], []
+
+    with torch.no_grad():
+        for X, y in tqdm(dataloader):
+            X, y = X.to(device), y.float().to(device)
+            logits = model(X).squeeze(1)
+            loss = loss_fn(logits, y)
+            losses.append(loss.item())
+
+            probs = torch.sigmoid(logits)
+            preds = (probs > 0.5).float()
+            acc = (preds == y).float().mean()
+            accs.append(acc.item())
+
+    return np.mean(losses), np.mean(accs)
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = ResNet18()
+
+loss_fn = nn.BCEWithLogitsLoss()  # logits → sigmoid implícito
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
+
+#Creamos listas donde guardaremos los resultados
+train_losses=[]
+test_losses=[]
+train_accuracies=[]
+test_accuracies=[]
+
+#Iniciamos un contador par cronometrar el tiempo de ejecución
+start_time = time.time()
+
+for t in range(epochs):
+    print(f"Epoch {t+1}\n-------------------------------")
+    train_loss, train_accuracy = train_loop(train_loader, model, loss_fn, optimizer, device)
+    test_loss, test_accuracy = val_loop(val_loader, model, loss_fn, device)
+    train_losses.append(train_loss)
+    train_accuracies.append(train_accuracy)
+    test_losses.append(test_loss)
+    test_accuracies.append(test_accuracy)
+    print("Avg train loss", train_loss, ", Avg test loss", test_loss, "Current learning rate", scheduler.get_last_lr())
+print("Done!")
+
+end_time = time.time()
+dense_elapsed_time = end_time - start_time
