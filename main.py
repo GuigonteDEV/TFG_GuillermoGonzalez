@@ -1,8 +1,18 @@
 from pathlib import Path
 import torch
+import numpy as np
+from torch.utils.data import DataLoader
+import time as time
+import matplotlib.pyplot as plt
+import random
 from Funciones.Tensor_Images import build_tensors, load_csv
 from Funciones.Build_WSI import reconstruct, load_pt
+from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_list, Transforms, LazyPatchDataset, WeightedSampler
 
+
+# ---------------------------
+# Configuración general universal
+# ---------------------------
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
 
@@ -11,9 +21,11 @@ Create_Tensor = False
 Create_WSI = False
 
 
+################################
 # ---------------------------
 # Creación de Tensores WSI
 # ---------------------------
+################################
 
 if Create_Tensor:
     excl_art_resection_tot = 0
@@ -74,9 +86,11 @@ if Create_Tensor:
     
 
 
+################################
 # ---------------------------
 # Reconstrucción WSI
 # ---------------------------
+################################
 
 if Create_WSI:
     for n_slide in range(1,201):
@@ -96,4 +110,128 @@ if Create_WSI:
 
         print(f"Reconstrucción guardada en: {out_dir / f'{n_slide_str}_WSI.png'}")
         print(f"Rejilla (cols, rows): {grid_shape}, patches colocados: {placed}")
+        
+        
+################################
+# ---------------------------
+# Creación Dataloader
+# ---------------------------
+################################
 
+# ---------------------------
+# Configuración general
+# ---------------------------
+
+CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
+PT_DIR = ROOT / 'processed' 
+IMAGE_SIZE = 256
+BATCH_SIZE = 32 
+
+#Inicio cronómetro
+start_time = time.time()
+
+# ---------------------------
+#Creación índices Dataset
+# ---------------------------
+
+train_idx, val_idx = Dataset_Division(CSV_PATH)
+
+train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx,CSV_PATH)
+val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx, CSV_PATH)
+
+
+# ---------------------------
+#Inicialización Transforms Augmentation
+# ---------------------------
+
+train_transforms, val_transforms = Transforms(IMAGE_SIZE)
+
+
+# ---------------------------
+# Creación subset
+# ---------------------------
+
+subset_train_idx = train_idx[:int(len(train_idx) * 0.1)]
+subset_val_idx = val_idx[:int(len(val_idx) * 0.1)]
+
+train_imgs_sub, train_tumors_sub, train_notumors_sub = summarize_file_list(subset_train_idx, CSV_PATH)
+val_imgs_sub, val_tumors_sub, val_notumors_sub = summarize_file_list(subset_val_idx, CSV_PATH)
+
+
+# ---------------------------
+# Generación Dataset train / val
+# ---------------------------
+
+#Separación de files
+
+pt_files = list(PT_DIR.glob("*.pt"))
+pt_files = np.array(pt_files)
+
+train_files = pt_files[subset_train_idx]
+val_files = pt_files[subset_val_idx]
+
+
+train_dataset = LazyPatchDataset(train_files, transform = train_transforms)
+val_dataset = LazyPatchDataset(val_files, transform = val_transforms)
+
+
+# ---------------------------
+# WeightedRandomSampler para train
+# ---------------------------
+
+train_sampler = WeightedSampler(train_dataset.labels)
+
+
+# ---------------------------
+# DataLoaders
+# ---------------------------
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
+
+
+# ---------------------------
+# Ejemplo de iteración
+# ---------------------------
+if __name__ == "__main__":
+    
+    print("Split inicial:")
+    print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
+    print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
+    
+    print("Split subset:")
+    print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs_sub}, tumors: {train_tumors_sub}")
+    print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs_sub}, tumors: {val_tumors_sub}")
+    
+    #Creacion Imagenes por comprobacion
+    # coger un batch
+    images, labels = next(iter(train_loader))
+
+    # seleccionar 10 índices aleatorios del batch
+    idxs = random.sample(range(images.size(0)), 10)
+
+    # desnormalizar (para que se vean bien)
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
+    std  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
+
+    plt.figure(figsize=(15, 6))
+
+    for i, idx in enumerate(idxs):
+        img = images[idx].cpu() * std + mean
+        img = img.clamp(0, 1)
+
+        plt.subplot(2, 5, i + 1)
+        plt.imshow(img.permute(1, 2, 0))
+        plt.title(f"Label: {labels[idx].item()}")
+        plt.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+    
+    for batch_idx, (images, labels) in enumerate(train_loader):
+        print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
+        print(f"Número de patches tumor: {(labels == 1).sum().item()}")
+        if batch_idx == 1:
+            break
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"\nTiempo de entrenamiento: {elapsed_time:.4f} segundos")
