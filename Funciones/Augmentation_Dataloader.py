@@ -15,27 +15,28 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import random
+from tqdm import tqdm
+import time as time
 
 # ---------------------------
 # Configuración general
 # ---------------------------
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
-CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
-PT_DIR = ROOT / 'processed' 
+
+
 BATCH_SIZE = 32
 IMAGE_SIZE = 256  
 RANDOM_SEED = 42
 VAL_FRACTION = 0.15
+
+#Inicio cronómetro
+start_time = time.time()
 
 # ---------------------------
 # Division Dataset No Leakage
 # ---------------------------
 
 #Leer el CSV con info de WSI
-
-def rotate_90(img):
-    angle = random.choice([0, 90, 180, 270])
-    return transforms.functional.rotate(img, angle)
 
 def Read_CSV(CSV_PATH):
 
@@ -52,12 +53,16 @@ def Read_CSV(CSV_PATH):
     
     return strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI
 
-strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI = Read_CSV(CSV_PATH)
+def Dataset_Division(CSV_PATH):
 
-#División stratificada de val y train
+    strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI = Read_CSV(CSV_PATH)
 
-sss = StratifiedShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=RANDOM_SEED)
-train_idx, val_idx = next(sss.split(paths_WSI, strat_labels))
+    #División stratificada de val y train
+
+    sss = StratifiedShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=RANDOM_SEED)
+    train_idx, val_idx = next(sss.split(paths_WSI, strat_labels))
+    
+    return train_idx, val_idx
 
 # calcular patch-level distribuciones iniciales
 
@@ -78,6 +83,10 @@ val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx)
 # ---------------------------
 # Definir augmentations on-the-fly
 # ---------------------------
+
+def rotate_90(img):
+    angle = random.choice([0, 90, 180, 270])
+    return transforms.functional.rotate(img, angle)
 
 train_transforms = transforms.Compose([
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
@@ -225,8 +234,8 @@ train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = le
 # ---------------------------
 # DataLoaders
 # ---------------------------
-train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler, num_workers = 4)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 2)
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
 
 # ---------------------------
 # Ejemplo de iteración
@@ -241,6 +250,8 @@ if __name__ == "__main__":
     print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
     print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
     
+    '''
+    #Creacion Imagenes por comprobacion
     # coger un batch
     images, labels = next(iter(train_loader))
 
@@ -264,9 +275,13 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
+    '''
     
     for batch_idx, (images, labels) in enumerate(train_loader):
         print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
         print(f"Número de patches tumor: {(labels == 1).sum().item()}")
         if batch_idx == 1:
             break
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"\nTiempo de entrenamiento: {elapsed_time:.4f} segundos")

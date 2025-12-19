@@ -11,6 +11,9 @@ Create_Tensor = False
 Create_WSI = False
 
 
+# ---------------------------
+# Creación de Tensores WSI
+# ---------------------------
 
 if Create_Tensor:
     excl_art_resection_tot = 0
@@ -69,6 +72,11 @@ if Create_Tensor:
     print(f'Número total patches tumor:', tumor_tot)
     print(f'Número total patches no tumor', no_tumor_tot)
     
+
+
+# ---------------------------
+# Reconstrucción WSI
+# ---------------------------
 
 if Create_WSI:
     for n_slide in range(1,201):
