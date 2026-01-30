@@ -88,8 +88,26 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             "labels",
             shape=(max_samples,),
             maxshape=(None,),
-            dtype="uint8"
+            dtype="float16"
         )
+        
+        CLASS_TO_SOFT_LABEL = {
+            # Tumor claro
+            'adenocarcinoma': 1.0,
+            'suspicious_for_invasion': 0.95,
+            'lymphovascular_invasion': 1.0,
+
+            # Tumor ambiguo
+            'highgrade_dysplasia': 0.85,
+            'tumor_necrosis': 0.6,
+
+            # No tumor pero confuso
+            'lowgrade_dysplasia': 0.35,
+            'inflammation': 0.2,
+
+            # No tumor claro
+            'normal': 0.0,
+        }
 
     
         for idx, row in df.iterrows():
@@ -120,18 +138,20 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             
             # etiquetas multilabel: vector de 0/1
             
-            tumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in TUMOR_COLUMNS)
-            notumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in NOTUMOR_COLUMNS)
-            
-            # Las siguientes lineas es de comprobación de que esta todo OK
-            if tumor_present and notumor_present:
-                excl_conflict += 1
+            active_scores = []
+
+            for col, score in CLASS_TO_SOFT_LABEL.items():
+                try:
+                    if int(row.get(col, 0)) == 1:
+                        active_scores.append(score)
+                except:
+                    pass
                 
-                #continue
-            
-            if not (tumor_present or notumor_present):
+            if len(active_scores) == 0:
                 excl_no_label += 1
                 continue
+
+            soft_label = max(active_scores)
             
             try:
                 arr = load_image_as_array(img_path, target_size, force_channels)
@@ -141,12 +161,8 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
                 continue
             
             img_ds[images_written] = arr
-            label_ds[images_written] = 1 if tumor_present else 0
+            label_ds[images_written] = soft_label
             
-            if tumor_present:
-                tumor_tot += 1
-            else:
-                no_tumor_tot += 1
                 
             images_written += 1
         
@@ -167,7 +183,7 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
 
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
-out_dir = ROOT / 'processed_h5'
+out_dir = ROOT / 'processed_h5_soft'
 out_dir.mkdir(exist_ok=True)
     
 
@@ -176,7 +192,7 @@ for n_slide in range(1,201):
         n_slide_str = str(n_slide).zfill(3) 
         DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
         CSV_PATH = DATA_DIR / f'{n_slide_str}_labels.csv'
-        out_dir = ROOT / 'processed_h5' / f'{n_slide_str}_h5.h5'
+        out_dir = ROOT / 'processed_h5_soft' / f'{n_slide_str}_h5_soft.h5'
         TARGET_SIZE = (256, 256)   
         FORCE_CHANNELS = 3  
         
