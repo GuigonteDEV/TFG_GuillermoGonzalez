@@ -84,11 +84,18 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             chunks=(1, target_size[1], target_size[0], force_channels)
         )
 
-        label_ds = h5.create_dataset(
-            "labels",
+        label_soft_ds = h5.create_dataset(
+            "labels_soft",
             shape=(max_samples,),
             maxshape=(None,),
-            dtype="float16"
+            dtype="float32"
+        )
+        
+        label_hard_ds = h5.create_dataset(
+            "labels_hard",
+            shape=(max_samples,),
+            maxshape=(None,),
+            dtype="uint8"
         )
         
         CLASS_TO_SOFT_LABEL = {
@@ -138,6 +145,9 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             
             # etiquetas multilabel: vector de 0/1
             
+            tumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in TUMOR_COLUMNS)
+            notumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in NOTUMOR_COLUMNS)
+            
             active_scores = []
 
             for col, score in CLASS_TO_SOFT_LABEL.items():
@@ -161,15 +171,17 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
                 continue
             
             img_ds[images_written] = arr
-            label_ds[images_written] = soft_label
+            label_soft_ds[images_written] = soft_label
+            label_hard_ds[images_written] = 1 if tumor_present else 0
             
                 
             images_written += 1
         
     
         # Recortar datasets al tamaño real
-        #img_ds.resize((images_written, target_size[1], target_size[0], force_channels))
-        #label_ds.resize((images_written,))
+        img_ds.resize((images_written, target_size[1], target_size[0], force_channels))
+        label_soft_ds.resize((images_written,))
+        label_hard_ds.resize((images_written,))
     
     return {
         "n_images": images_written,

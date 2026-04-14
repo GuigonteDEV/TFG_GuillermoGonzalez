@@ -100,6 +100,8 @@ def Transforms(Image_SIZE):
         transforms.ToTensor(),
         transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229,0.224,0.225])
     ])
+    
+
 
     val_transforms = transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
@@ -212,6 +214,4 @@ def WeightedSampler(train_dataset):
     train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = len(sample_weights), replacement = True)
     
     return train_sampler
-
-
 

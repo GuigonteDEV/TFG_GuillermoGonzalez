@@ -175,6 +175,9 @@ pt_files = np.array(pt_files)
 train_files = pt_files[subset_train_idx]
 val_files = pt_files[subset_val_idx]
 
+print(train_files)
+print(val_files)
+
 
 train_dataset = LazyPatchDataset(train_files, transform = train_transforms)
 val_dataset = LazyPatchDataset(val_files, transform = val_transforms)
@@ -250,7 +253,8 @@ if __name__ == "__main__":
 # ---------------------------
 ################################
 
-epochs = 2
+epochs = 4
+
 
 # ---------------------------
 # Modelo ResNet18
@@ -258,13 +262,75 @@ epochs = 2
 class ResNet18(nn.Module):
     def __init__(self):
         super().__init__()
-        self.backbone = models.resnet18(pretrained=False)
+        self.backbone = models.resnet18(weights="IMAGENET1K_V1")
         in_features = self.backbone.fc.in_features
         self.backbone.fc = nn.Linear(in_features, 1)  # salida escalar
 
     def forward(self, x):
         return self.backbone(x) 
     
+
+def train_loop(dataloader, model, loss_fn, optimizer, device):
+    model.train()
+    losses = []
+    all_probs, all_labels = [], []
+
+    for X, y in tqdm(dataloader):
+        X, y = X.to(device), y.float().to(device)
+
+        optimizer.zero_grad()
+
+        with torch.cuda.amp.autocast():
+            logits = model(X).squeeze(1)
+            loss = loss_fn(logits, y)
+
+        
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
+        losses.append(loss.item())
+
+        probs = torch.sigmoid(logits)
+
+        # Guardar para métricas globales
+        all_probs.append(probs.detach().cpu())
+        all_labels.append(y.detach().cpu())
+
+    all_probs = torch.cat(all_probs).numpy()
+    all_labels = torch.cat(all_labels).numpy()
+
+    roc = roc_auc_score(all_labels, all_probs)
+    pr  = average_precision_score(all_labels, all_probs)
+
+    return np.mean(losses), roc, pr
+
+
+def val_loop(dataloader, model, loss_fn, device):
+    model.eval()
+    losses = []
+    all_probs, all_labels = [], []
+
+    with torch.no_grad():
+        for X, y in tqdm(dataloader):
+            X, y = X.to(device), y.float().to(device)
+            logits = model(X).squeeze(1)
+            loss = loss_fn(logits, y)
+            losses.append(loss.item())
+
+            probs = torch.sigmoid(logits)
+
+            all_probs.append(probs.cpu())
+            all_labels.append(y.cpu())
+
+    all_probs = torch.cat(all_probs).numpy()
+    all_labels = torch.cat(all_labels).numpy()
+
+    roc = roc_auc_score(all_labels, all_probs)
+    pr  = average_precision_score(all_labels, all_probs)
+
+    return np.mean(losses), roc, pr
+
 
 def train_loop(dataloader, model, loss_fn, optimizer, device):
     model.train()
