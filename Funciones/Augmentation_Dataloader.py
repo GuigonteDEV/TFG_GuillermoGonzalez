@@ -15,6 +15,7 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 import random
 from tqdm import tqdm
+import h5py
 
 
 # ---------------------------
@@ -72,6 +73,48 @@ def summarize_file_list(idx, CSV_PATH):
     
     return patches, tumors, notumors
 
+def summarize_file_list_h5(h5_files):
+    tumors = 0
+    notumors = 0
+    patches = 0
+    for h5_path in h5_files:
+        with h5py.File(h5_path, "r") as h5:
+            labels = h5["labels_hard"][:]
+            tumors += (labels == 1).sum()
+            notumors += (labels == 0).sum()
+            patches += len(labels)
+    
+    return patches, tumors, notumors
+
+def summarize_file_h5(h5_files):
+    tumors = 0
+    notumors = 0
+    patches = 0
+    adenocarcinoma = 0
+    suspicious_for_invasion = 0
+    highgrade_dysplasia = 0
+    tumor_necrosis = 0
+    lowgrade_dysplasia = 0
+    inflammation = 0
+    normal = 0
+    for h5_path in h5_files:
+        with h5py.File(h5_path, "r") as h5:
+            labels_hard = h5["labels_hard"][:]
+            labels_soft = h5["labels_soft"][:]
+            tumors += (labels_hard == 1).sum()
+            notumors += (labels_hard == 0).sum()
+            adenocarcinoma += (labels_soft == 1).sum()
+            suspicious_for_invasion += (labels_soft == 0.95).sum()
+            highgrade_dysplasia += (labels_soft == 0.85).sum()
+            tumor_necrosis += (labels_soft == 0.6).sum()
+            lowgrade_dysplasia += (labels_soft == 0.35).sum()
+            inflammation += (labels_soft == 0.2).sum()
+            normal += (labels_soft == 0.0).sum()
+            patches += len(labels_hard)
+            if any(labels_soft == 0.95):
+                print(h5_path)
+    
+    return patches, tumors, notumors, adenocarcinoma, suspicious_for_invasion, highgrade_dysplasia, tumor_necrosis, lowgrade_dysplasia, inflammation, normal
 
 # ---------------------------
 # Definir augmentations on-the-fly
@@ -85,7 +128,9 @@ def Transforms(Image_SIZE):
     
     train_transforms = transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-        transforms.Lambda(rotate_90),
+        transforms.RandomApply([
+            transforms.Lambda(rotate_90)
+        ], p=0.5),
         transforms.RandomHorizontalFlip(p = 0.5),
         transforms.RandomVerticalFlip(p = 0.5),
         transforms.RandomApply([
@@ -96,7 +141,7 @@ def Transforms(Image_SIZE):
                 brightness = (0.9, 1.1),
                 contrast = (0.9, 1.1)
                 ), 
-        ], p = 0.3),
+        ], p = 0.25),
         transforms.ToTensor(),
         transforms.Normalize(mean = [0.485,0.456,0.406], std = [0.229,0.224,0.225])
     ])
@@ -111,66 +156,53 @@ def Transforms(Image_SIZE):
     
     return train_transforms, val_transforms
 
+def compute_pos_weight(h5_files):
+    n_pos = 0
+    n_neg = 0
+
+    for h5_path in h5_files:
+        with h5py.File(h5_path, "r") as h5:
+            labels = h5["labels_hard"][:]
+            n_pos += (labels == 1).sum()
+            n_neg += (labels == 0).sum()
+
+    return torch.tensor([(n_neg / n_pos)], dtype=torch.float32)
+
 # ---------------------------
-# Dataset PyTorch
+# Dataset H5 Soft
 # ---------------------------
-'''
-class PatchesDataset(Dataset):
-    def __init__(self, images_tensor, labels_tensor, transform=None):
-        self.images = images_tensor
-        self.labels = labels_tensor
+    
+class H5DatasetSoft(Dataset):
+    def __init__(self, h5_files, transform=None):
+        self.h5_files = list(h5_files)
         self.transform = transform
 
-    def __len__(self):
-        return len(self.labels)
+        self.index = []  # (h5_path, local_idx)
 
-    def __getitem__(self, idx):
-        image = self.images[idx].clone()
-        label = self.labels[idx]
-
-        if self.transform:
-            image = to_pil_image(image)
-            image = self.transform(image)
-
-        return image, label
-'''
-
-# ---------------------------
-# Dataset PyTorch Lazy
-# ---------------------------
-class LazyPatchDataset(Dataset):
-    def __init__(self, pt_files, transform=None):
-        self.pt_files = list(pt_files)
-        self.transform = transform
-
-        self.index = []   # [(pt_path, patch_idx), ...]
-        self.labels = []
-
-        for pt_path in self.pt_files:
-            data = torch.load(pt_path, map_location="cpu")
-            n_patches = data["labels"].shape[0]
-
-            for i in range(n_patches):
-                self.index.append((pt_path, i))
-                self.labels.append(int(data["labels"][i]))
-
-        self.labels = np.array(self.labels)
+        for h5_path in self.h5_files:
+            with h5py.File(h5_path, "r") as h5:
+                n = h5["images"].shape[0]
+            for i in range(n):
+                self.index.append((h5_path, i))
 
     def __len__(self):
         return len(self.index)
 
     def __getitem__(self, idx):
-        pt_path, patch_idx = self.index[idx]
+        h5_path, local_idx = self.index[idx]
 
-        data = torch.load(pt_path, map_location="cpu")
-        image = data["images"][patch_idx]
-        label = data["labels"][patch_idx]
+        with h5py.File(h5_path, "r") as h5:
+            img = h5["images"][local_idx]
+            label_soft = h5["labels_soft"][local_idx]
+            label_hard = h5["labels_hard"][local_idx]
 
         if self.transform:
-            image = to_pil_image(image)
-            image = self.transform(image)
-        
-        return image, label
+            img = to_pil_image(img)
+            img = self.transform(img)   # aquí ya sale tensor normalizado
+        else:
+            img = torch.from_numpy(img).permute(2,0,1).float() / 255.0
+
+        return img, label_soft, label_hard
 
 
 
@@ -207,6 +239,7 @@ val_dataset = PatchesDataset(val_images, val_labels, transform=val_transforms)
 
 def WeightedSampler(train_dataset):
 
+    train_dataset = np.array(train_dataset.long().cpu().numpy())
     class_counts = np.bincount(train_dataset)
     class_weights = 1.0 / class_counts
     sample_weights = class_weights[train_dataset]

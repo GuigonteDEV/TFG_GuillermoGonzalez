@@ -1,5 +1,6 @@
 from pathlib import Path
 import torch
+import os
 import numpy as np
 from torch.utils.data import DataLoader
 import time as time
@@ -12,7 +13,8 @@ import torch.optim as optim
 from tqdm import tqdm
 from Funciones.Tensor_Images import build_tensors, load_csv
 from Funciones.Build_WSI import reconstruct, load_pt
-from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_list, Transforms, LazyPatchDataset, WeightedSampler
+from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_h5, Transforms, H5DatasetSoft, WeightedSampler, compute_pos_weight
+from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
 
 # ---------------------------
@@ -128,7 +130,7 @@ if Create_WSI:
 # ---------------------------
 
 CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
-PT_DIR = ROOT / 'processed' 
+H5_SOFT_DIR = ROOT / 'processed_h5_soft' 
 IMAGE_SIZE = 256
 BATCH_SIZE = 32 
 
@@ -141,8 +143,41 @@ start_time = time.time()
 
 train_idx, val_idx = Dataset_Division(CSV_PATH)
 
-train_imgs, train_tumors, train_notumors = summarize_file_list(train_idx,CSV_PATH)
-val_imgs, val_tumors, val_notumors = summarize_file_list(val_idx, CSV_PATH)
+pt_files = list(H5_SOFT_DIR.glob("*.h5"))
+pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
+pt_files = np.array(pt_files)
+
+train_files = pt_files[train_idx]
+val_files = pt_files[val_idx]
+
+
+train_imgs, train_tumors, train_notumors, t_adenocarcinoma, t_suspicious_for_invasion, t_highgrade_dysplasia, t_tumor_necrosis, t_lowgrade_dysplasia, t_inflammation, t_normal = summarize_file_h5(train_files)
+print('###################')
+val_imgs, val_tumors, val_notumors, v_adenocarcinoma, v_suspicious_for_invasion, v_highgrade_dysplasia, v_tumor_necrosis, v_lowgrade_dysplasia, v_inflammation, v_normal = summarize_file_h5(val_files)
+
+print("========== TRAIN ==========")
+print(f"Imágenes totales: {train_imgs}")
+print(f"Tumor: {train_tumors}")
+print(f"No tumor: {train_notumors}")
+print(f"Adenocarcinoma: {t_adenocarcinoma}")
+print(f"Suspicious for invasion: {t_suspicious_for_invasion}")
+print(f"High-grade dysplasia: {t_highgrade_dysplasia}")
+print(f"Tumor necrosis: {t_tumor_necrosis}")
+print(f"Low-grade dysplasia: {t_lowgrade_dysplasia}")
+print(f"Inflammation: {t_inflammation}")
+print(f"Normal: {t_normal}")
+
+print("\n========== VALIDATION ==========")
+print(f"Imágenes totales: {val_imgs}")
+print(f"Tumor: {val_tumors}")
+print(f"No tumor: {val_notumors}")
+print(f"Adenocarcinoma: {v_adenocarcinoma}")
+print(f"Suspicious for invasion: {v_suspicious_for_invasion}")
+print(f"High-grade dysplasia: {v_highgrade_dysplasia}")
+print(f"Tumor necrosis: {v_tumor_necrosis}")
+print(f"Low-grade dysplasia: {v_lowgrade_dysplasia}")
+print(f"Inflammation: {v_inflammation}")
+print(f"Normal: {v_normal}")
 
 
 # ---------------------------
@@ -159,93 +194,31 @@ train_transforms, val_transforms = Transforms(IMAGE_SIZE)
 subset_train_idx = train_idx[:int(len(train_idx) * 0.1)]
 subset_val_idx = val_idx[:int(len(val_idx) * 0.1)]
 
-train_imgs_sub, train_tumors_sub, train_notumors_sub = summarize_file_list(subset_train_idx, CSV_PATH)
-val_imgs_sub, val_tumors_sub, val_notumors_sub = summarize_file_list(subset_val_idx, CSV_PATH)
-
 
 # ---------------------------
-# Generación Dataset train / val
+# Creación subset
 # ---------------------------
 
-#Separación de files
-
-pt_files = list(PT_DIR.glob("*.pt"))
-pt_files = np.array(pt_files)
-
-train_files = pt_files[subset_train_idx]
-val_files = pt_files[subset_val_idx]
-
-print(train_files)
-print(val_files)
-
-
-train_dataset = LazyPatchDataset(train_files, transform = train_transforms)
-val_dataset = LazyPatchDataset(val_files, transform = val_transforms)
+train_dataset = H5DatasetSoft(train_files, transform = train_transforms)
+val_dataset = H5DatasetSoft(val_files, transform = val_transforms)
 
 
 # ---------------------------
 # WeightedRandomSampler para train
 # ---------------------------
 
-train_sampler = WeightedSampler(train_dataset.labels)
+#train_sampler = WeightedSampler(train_dataset.labels)
 
 
 # ---------------------------
 # DataLoaders
 # ---------------------------
-train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, sampler = train_sampler)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, shuffle = False, num_workers = 4)
+
+#Las especificaciones de num_workers puede variar segun ordenador
 
 
-# ---------------------------
-# Ejemplo de iteración
-# ---------------------------
-'''
-if __name__ == "__main__":
-    
-    print("Split inicial:")
-    print(f" Train WSI: {len(train_idx)}, patches: {train_imgs}, tumors: {train_tumors}")
-    print(f" Val   WSI: {len(val_idx)}, patches: {val_imgs}, tumors: {val_tumors}")
-    
-    print("Split subset:")
-    print(f" Train WSI: {len(subset_train_idx)}, patches: {train_imgs_sub}, tumors: {train_tumors_sub}")
-    print(f" Val   WSI: {len(subset_val_idx)}, patches: {val_imgs_sub}, tumors: {val_tumors_sub}")
-    
-    #Creacion Imagenes por comprobacion
-    # coger un batch
-    images, labels = next(iter(train_loader))
-
-    # seleccionar 10 índices aleatorios del batch
-    idxs = random.sample(range(images.size(0)), 10)
-
-    # desnormalizar (para que se vean bien)
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
-    std  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
-
-    plt.figure(figsize=(15, 6))
-
-    for i, idx in enumerate(idxs):
-        img = images[idx].cpu() * std + mean
-        img = img.clamp(0, 1)
-
-        plt.subplot(2, 5, i + 1)
-        plt.imshow(img.permute(1, 2, 0))
-        plt.title(f"Label: {labels[idx].item()}")
-        plt.axis("off")
-
-    plt.tight_layout()
-    plt.show()
-    
-    for batch_idx, (images, labels) in enumerate(train_loader):
-        print(f"Batch {batch_idx} - images: {images.shape}, labels: {labels.shape}")
-        print(f"Número de patches tumor: {(labels == 1).sum().item()}")
-        if batch_idx == 1:
-            break
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"\nTiempo de entrenamiento: {elapsed_time:.4f} segundos")
-    
-'''
 
 ################################
 # ---------------------------
@@ -262,12 +235,28 @@ epochs = 4
 class ResNet18(nn.Module):
     def __init__(self):
         super().__init__()
-        self.backbone = models.resnet18(weights="IMAGENET1K_V1")
+        self.backbone = models.resnet18()
         in_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(in_features, 1)  # salida escalar
+        self.backbone.fc = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(in_features, 1)
+        )  # salida escalar
 
     def forward(self, x):
         return self.backbone(x) 
+
+class EfficientNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = models.efficientnet_b2(weights="IMAGENET1K_V1")
+        in_features = self.backbone.classifier[1].in_features
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(0.3),
+            nn.Linear(in_features, 1)
+        )
+
+    def forward(self, x):
+        return self.backbone(x)
     
 
 def train_loop(dataloader, model, loss_fn, optimizer, device):
@@ -275,14 +264,14 @@ def train_loop(dataloader, model, loss_fn, optimizer, device):
     losses = []
     all_probs, all_labels = [], []
 
-    for X, y in tqdm(dataloader):
-        X, y = X.to(device), y.float().to(device)
+    for X, y_soft, y_hard in tqdm(dataloader):
+        X, y_soft, y_hard = X.to(device), y_soft.float().to(device), y_hard.float().to(device)
 
         optimizer.zero_grad()
 
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast("cuda"):
             logits = model(X).squeeze(1)
-            loss = loss_fn(logits, y)
+            loss = loss_fn(logits, y_soft)
 
         
         scaler.scale(loss).backward()
@@ -295,7 +284,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, device):
 
         # Guardar para métricas globales
         all_probs.append(probs.detach().cpu())
-        all_labels.append(y.detach().cpu())
+        all_labels.append(y_hard.detach().cpu())
 
     all_probs = torch.cat(all_probs).numpy()
     all_labels = torch.cat(all_labels).numpy()
@@ -312,16 +301,16 @@ def val_loop(dataloader, model, loss_fn, device):
     all_probs, all_labels = [], []
 
     with torch.no_grad():
-        for X, y in tqdm(dataloader):
-            X, y = X.to(device), y.float().to(device)
+        for X, y_soft, y_hard in tqdm(dataloader):
+            X, y_soft, y_hard = X.to(device), y_soft.float().to(device), y_hard.float().to(device)
             logits = model(X).squeeze(1)
-            loss = loss_fn(logits, y)
+            loss = loss_fn(logits, y_soft)
             losses.append(loss.item())
 
             probs = torch.sigmoid(logits)
 
             all_probs.append(probs.cpu())
-            all_labels.append(y.cpu())
+            all_labels.append(y_hard.cpu())
 
     all_probs = torch.cat(all_probs).numpy()
     all_labels = torch.cat(all_labels).numpy()
@@ -331,76 +320,72 @@ def val_loop(dataloader, model, loss_fn, device):
 
     return np.mean(losses), roc, pr
 
-
-def train_loop(dataloader, model, loss_fn, optimizer, device):
-    model.train()
-    losses, accs = [], []
-
-    for X, y in tqdm(dataloader):
-        X, y = X.to(device), y.float().to(device)
-
-        optimizer.zero_grad()
-        logits = model(X).squeeze(1)
-        loss = loss_fn(logits, y)
-        loss.backward()
-        optimizer.step()
-
-        losses.append(loss.item())
-
-        probs = torch.sigmoid(logits)
-        preds = (probs > 0.5).float()
-        acc = (preds == y).float().mean()
-        accs.append(acc.item())
-        
-    scheduler.step(np.mean(losses))
-
-    return np.mean(losses), np.mean(accs)
-
-
-def val_loop(dataloader, model, loss_fn, device):
-    model.eval()
-    losses, accs = [], []
-
-    with torch.no_grad():
-        for X, y in tqdm(dataloader):
-            X, y = X.to(device), y.float().to(device)
-            logits = model(X).squeeze(1)
-            loss = loss_fn(logits, y)
-            losses.append(loss.item())
-
-            probs = torch.sigmoid(logits)
-            preds = (probs > 0.5).float()
-            acc = (preds == y).float().mean()
-            accs.append(acc.item())
-
-    return np.mean(losses), np.mean(accs)
-
+# -----------------------------
+# DEVICE Y SCALER
+# -----------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = ResNet18()
+scaler = torch.amp.GradScaler("cuda")
+model = EfficientNet().to(device)
 
-loss_fn = nn.BCEWithLogitsLoss()  # logits → sigmoid implícito
+# -----------------------------
+# POS WEIGHT
+# -----------------------------
+pos_weight = compute_pos_weight(train_files).to(device)
+loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+
+# -----------------------------
+# FASE 2: descongelar último bloque del backbone
+# -----------------------------
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3)
 
-#Creamos listas donde guardaremos los resultados
-train_losses=[]
-test_losses=[]
-train_accuracies=[]
-test_accuracies=[]
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=1)
 
-#Iniciamos un contador par cronometrar el tiempo de ejecución
-start_time = time.time()
+train_losses = []
+test_losses = []
+train_prs = []
+val_prs = []
+train_rocs = []
+val_rocs = []
 
+output_dir = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto\Codigo\Model_Checkpoints')
+output_dir.mkdir(exist_ok=True)
+
+best_pr = 0
+
+# -----------------------------
+# TRAIN LOOP 
+# -----------------------------
 for t in range(epochs):
     print(f"Epoch {t+1}\n-------------------------------")
-    train_loss, train_accuracy = train_loop(train_loader, model, loss_fn, optimizer, device)
-    test_loss, test_accuracy = val_loop(val_loader, model, loss_fn, device)
+    
+    train_loss, train_roc, train_pr = train_loop(train_loader, model, loss_fn, optimizer, device)
+    val_loss, val_roc, val_pr = val_loop(val_loader, model, loss_fn, device)
+
+    scheduler.step(val_loss)
+
     train_losses.append(train_loss)
-    train_accuracies.append(train_accuracy)
-    test_losses.append(test_loss)
-    test_accuracies.append(test_accuracy)
-    print("Avg train loss", train_loss, ", Avg test loss", test_loss, "Current learning rate", scheduler.get_last_lr())
-print("Done!")
+    test_losses.append(val_loss)
+    train_prs.append(train_pr)
+    val_prs.append(val_pr)
+    train_rocs.append(train_roc)
+    val_rocs.append(val_roc)
+
+    if val_pr > best_pr:
+        best_pr = val_pr
+        checkpoint = {
+            'epoch': t+1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': val_loss,
+            'metrics': val_pr
+        }
+        torch.save(checkpoint, os.path.join(output_dir, "best_model.pth"))
+
+    print(f"Train Loss: {train_loss:.4f}, ROC: {train_roc:.4f}, PR: {train_pr:.4f}")
+    print(f"Val   Loss: {val_loss:.4f}, ROC: {val_roc:.4f}, PR: {val_pr:.4f}")
+    print("Current learning rate:", scheduler.get_last_lr())
 
 end_time = time.time()
 dense_elapsed_time = end_time - start_time
