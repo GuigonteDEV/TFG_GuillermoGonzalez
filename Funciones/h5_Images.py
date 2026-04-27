@@ -1,19 +1,44 @@
-'''
-Docstring for Tensor_Images
+"""
+h5_Images.py
+============
+Construye archivos HDF5 a partir de las imágenes y CSVs del dataset de biopsias.
+ 
+Formato de salida por archivo .h5
+----------------------------------
+  images       : uint8  (N, H, W, 3)   — imágenes en píxeles [0,255]
+  labels       : uint8  (N, NUM_CLASSES) — vector multilabel binario por patch
+  class_names  : atributo del dataset   — lista ordenada de nombres de clase
+ 
+Clases (orden fijo, índice = posición en el vector):
+  0  normal
+  1  lowgrade_dysplasia
+  2  inflammation
+  3  highgrade_dysplasia
+  4  tumor_necrosis
+  5  suspicious_for_invasion
+  6  lymphovascular_invasion
+  7  adenocarcinoma
+ 
+Exclusiones (no forman parte del vector, filtran el patch):
+  artifact, resection_edge  →  patch descartado completamente
+ 
+Un patch se descarta también si ninguna de las 8 clases tiene valor 1.
+Un patch con múltiples etiquetas activas es completamente válido:
+  el vector tendrá varios 1. Ej: adenocarcinoma=1, inflammation=1 → [0,0,1,0,0,0,0,1]
+ 
+Notas de diseño
+---------------
+- Las imágenes se guardan en su tamaño nativo (sin resize) por defecto.
+  El resize se delega al DataLoader para no comprometer los H5 si se
+  quiere experimentar con distintas resoluciones de entrada.
+- Si target_size se especifica, se aplica resize antes de guardar.
+- Compresión gzip level 4: buen equilibrio velocidad/espacio para uint8.
+- chunks=(1, H, W, 3): lectura aleatoria óptima para el DataLoader.
+"""
 
-Construye los tensores con los que se alimentara la red neuronal a partir de las imagenes y archivo CSV del dataset.
-
-Los tensores son de tipo Torch y de la forma:
-
-· images_tensor: imagenes de los patch
-
-· labels_tensor: etiqueta de los patch
-
-· meta_continuous: informacion espacial de la imagen dentro de WSI global
-
-· continuous_cols: indica cual que columna es cual dentro de la informacion de continuas
-'''
-
+# ---------------------------------------------------------------------------
+# IMPORTS
+# ---------------------------------------------------------------------------
 
 import os
 from pathlib import Path
@@ -24,20 +49,35 @@ import torch
 import h5py
 
 
-IGNORED_COLUMNS = ['burn_out_pct', 'low_saturation_pct', 'n_masks_for_slide']  
-FNAME_COL = 'fname'
+# ---------------------------------------------------------------------------
+# Definición de clases — ORDEN FIJO Y DOCUMENTADO
+# Cambiar el orden aquí rompe la compatibilidad con H5 ya generados.
+# ---------------------------------------------------------------------------
 
-# Columnas de etiquetas de distinción entre TUMOR vs NO TUMOR
-TUMOR_COLUMNS = ['highgrade_dysplasia', 'adenocarcinoma', 'suspicious_for_invasion',
-            'lymphovascular_invasion', 'tumor_necrosis']
+CLASS_NAMES = [
+    'normal',
+    'lowgrade_dysplasia',
+    'inflammation',
+    'highgrade_dysplasia',
+    'tumor_necrosis',
+    'suspicious_for_invasion',
+    'lymphovascular_invasion',
+    'adenocarcinoma',
+]
 
-NOTUMOR_COLUMNS = ['normal', 'lowgrade_dysplasia', 'inflammation']
+NUM_CLASSES = len(CLASS_NAMES)  # 8
 
-# Columnas de imagenes que se excluiran en el entrenamiento, no favorecen aprendizaje (no utiles)
+# Columnas que se usan solo para filtrar — el patch se descarta si alguna es != 0
 EXCLUDE_COLUMNS = ['artifact', 'resection_edge']
+
+# Columnas del CSV que no son etiquetas ni fname
+IGNORED_COLUMNS = ['burn_out_pct', 'low_saturation_pct', 'n_masks_for_slide']
+
+FNAME_COL = 'fname'
 
 
 def load_csv(csv_path):
+    """Carga el CSV de etiquetas, eliminando columnas auxiliares."""
     df = pd.read_csv(csv_path)
     for c in IGNORED_COLUMNS:
         if c in df.columns:
@@ -47,6 +87,8 @@ def load_csv(csv_path):
     return df
 
 def load_image_as_array(path, target_size=None, force_channels=3):
+    """Carga una imagen como array uint8 (H, W, C)."""
+    
     img = Image.open(path)
     if force_channels == 3:
         img = img.convert('RGB')
@@ -54,7 +96,7 @@ def load_image_as_array(path, target_size=None, force_channels=3):
         img = img.convert('L')
     if target_size is not None:
         img = img.resize(target_size, Image.BILINEAR)
-    arr = np.array(img)
+    arr = np.array(img, dtype=np.uint8)
     if force_channels == 3 and arr.ndim == 2:
         arr = np.stack([arr]*3, axis=-1)
     return arr
@@ -62,18 +104,18 @@ def load_image_as_array(path, target_size=None, force_channels=3):
 def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, force_channels=3, use_torch=True):
     
     images_written = 0
-    missing_images = []
-
     tumor_tot = 0
     no_tumor_tot = 0
     excl_art_resection = 0
-    excl_conflict = 0
     excl_no_label = 0
+    missing_images = []
+    per_class = {name: 0 for name in CLASS_NAMES}
 
     # Estimar número máximo (para prealocar)
     max_samples = len(df)
 
     with h5py.File(h5_out_path, "w") as h5:
+        
         img_ds = h5.create_dataset(
             "images",
             shape=(max_samples, target_size[1], target_size[0], force_channels),
@@ -84,40 +126,16 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             chunks=(1, target_size[1], target_size[0], force_channels)
         )
 
-        label_soft_ds = h5.create_dataset(
-            "labels_soft",
-            shape=(max_samples,),
-            maxshape=(None,),
-            dtype="float32"
-        )
-        
-        label_hard_ds = h5.create_dataset(
-            "labels_hard",
-            shape=(max_samples,),
-            maxshape=(None,),
+        label_ds = h5.create_dataset(
+            "labels",
+            shape=(max_samples, NUM_CLASSES),
+            maxshape=(None,NUM_CLASSES),
             dtype="uint8"
         )
         
-        CLASS_TO_SOFT_LABEL = {
-            # Tumor claro
-            'adenocarcinoma': 1.0,
-            'suspicious_for_invasion': 0.95,
-            'lymphovascular_invasion': 1.0,
-
-            # Tumor ambiguo
-            'highgrade_dysplasia': 0.85,
-            'tumor_necrosis': 0.6,
-
-            # No tumor pero confuso
-            'lowgrade_dysplasia': 0.35,
-            'inflammation': 0.2,
-
-            # No tumor claro
-            'normal': 0.0,
-        }
-
     
         for idx, row in df.iterrows():
+            
             fname = str(row[FNAME_COL]).strip()
             parts = fname.split('/')
             if len(parts) >= 2:
@@ -128,7 +146,6 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             if not img_path.exists():
                 missing_images.append((idx, str(img_path)))
                 continue
-            
             
             excluded_flag = False
             for c in EXCLUDE_COLUMNS:
@@ -143,25 +160,19 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
             if excluded_flag:
                 continue
             
-            # etiquetas multilabel: vector de 0/1
+            label_vector = np.zeros(NUM_CLASSES, dtype=np.uint8)
             
-            tumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in TUMOR_COLUMNS)
-            notumor_present = any(int(row.get(c, 0)) != 0 if str(row.get(c, 0)).strip() != '' else False for c in NOTUMOR_COLUMNS)
-            
-            active_scores = []
-
-            for col, score in CLASS_TO_SOFT_LABEL.items():
+            for i, class_name in enumerate(CLASS_NAMES):
+                raw = row.get(class_name, 0)
                 try:
-                    if int(row.get(col, 0)) == 1:
-                        active_scores.append(score)
-                except:
+                    if int(float(str(raw).strip())) != 0:
+                        label_vector[i] = 1
+                except (ValueError, TypeError):
                     pass
-                
-            if len(active_scores) == 0:
+        
+            if label_vector.sum() == 0:
                 excl_no_label += 1
                 continue
-
-            soft_label = max(active_scores)
             
             try:
                 arr = load_image_as_array(img_path, target_size, force_channels)
@@ -171,45 +182,105 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
                 continue
             
             img_ds[images_written] = arr
-            label_soft_ds[images_written] = soft_label
-            label_hard_ds[images_written] = 1 if tumor_present else 0
+            label_ds[images_written] = label_vector
             
+            # Conteo de pathes por clase
+            for i, name in enumerate(CLASS_NAMES):
+                if label_vector[i] == 1:
+                    per_class[name] += 1
                 
             images_written += 1
         
-    
         # Recortar datasets al tamaño real
         img_ds.resize((images_written, target_size[1], target_size[0], force_channels))
-        label_soft_ds.resize((images_written,))
-        label_hard_ds.resize((images_written,))
-    
+        label_ds.resize((images_written, NUM_CLASSES))
+        
     return {
         "n_images": images_written,
-        "tumor": tumor_tot,
-        "no_tumor": no_tumor_tot,
+        "per_class": per_class,
         "excluded_artifact": excl_art_resection,
-        "excluded_conflict": excl_conflict,
         "excluded_no_label": excl_no_label,
         "missing_images": missing_images
     }
 
 
-ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
-out_dir = ROOT / 'processed_h5_soft'
-out_dir.mkdir(exist_ok=True)
-    
+# ---------------------------------------------------------------------------
+# Script principal
+# ---------------------------------------------------------------------------
 
+if __name__ == "__main__":
 
-for n_slide in range(1,201):
-        n_slide_str = str(n_slide).zfill(3) 
-        DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
-        CSV_PATH = DATA_DIR / f'{n_slide_str}_labels.csv'
-        out_dir = ROOT / 'processed_h5_soft' / f'{n_slide_str}_h5_soft.h5'
-        TARGET_SIZE = (256, 256)   
-        FORCE_CHANNELS = 3  
-        
-        df = load_csv(CSV_PATH)
-        x = build_h5(df, DATA_DIR, n_slide_str, out_dir,  target_size=TARGET_SIZE, force_channels=3, use_torch=True)
-        print("Guardado en:", out_dir)
+    # -----------------------------------------------------------------------
+    # Configuración — ajusta estas rutas a tu entorno
+    # -----------------------------------------------------------------------
+    ROOT    = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
+    OUT_DIR = ROOT / 'processed_h5_multilabel'
+    OUT_DIR.mkdir(exist_ok=True)
+    TARGET_SIZE = (256, 256)
+    FORCE_CHANNELS = 3
+
+    # Rango de slides a procesar
+    SLIDE_RANGE = range(1, 201)
+
+    # -----------------------------------------------------------------------
+    # Acumuladores globales para resumen final
+    # -----------------------------------------------------------------------
+    total_written     = 0
+    total_excl_art    = 0
+    total_excl_nolbl  = 0
+    total_missing     = 0
+    total_per_class   = {name: 0 for name in CLASS_NAMES}
+ 
+    # -----------------------------------------------------------------------
+    # Bucle por slide
+    # -----------------------------------------------------------------------
+    for n_slide in SLIDE_RANGE:
+        n_slide_str = str(n_slide).zfill(3)
+ 
+        DATA_DIR  = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
+        CSV_PATH  = DATA_DIR / f'{n_slide_str}_labels.csv'
+        H5_PATH   = OUT_DIR / f'{n_slide_str}_multilabel.h5'
+ 
+        if not CSV_PATH.exists():
+            print(f"[WARN] CSV no encontrado: {CSV_PATH}, saltando.")
+            continue
+ 
+        df    = load_csv(CSV_PATH)
+        stats = build_h5(df, DATA_DIR, n_slide_str, H5_PATH, target_size=TARGET_SIZE, force_channels=FORCE_CHANNELS)
+ 
+        print(f"\n{'='*50}")
+        print(f"  Slide {n_slide_str}")
+        print(f"{'='*50}")
+        print(f"  Patches escritos : {stats['n_images']}")
+        print(f"  Excl. artefactos : {stats['excluded_artifact']}")
+        print(f"  Excl. sin label  : {stats['excluded_no_label']}")
+        print(f"  Imágenes faltantes: {len(stats['missing_images'])}")
+        print(f"  Distribución de clases:")
+        for name, count in stats['per_class'].items():
+            pct = 100 * count / stats['n_images'] if stats['n_images'] > 0 else 0
+            print(f"    [{CLASS_NAMES.index(name)}] {name:<30} {count:>7}  ({pct:.1f}%)")
+
+        total_written    += stats['n_images']
+        total_excl_art   += stats['excluded_artifact']
+        total_excl_nolbl += stats['excluded_no_label']
+        total_missing    += len(stats['missing_images'])
+        for name in CLASS_NAMES:
+            total_per_class[name] += stats['per_class'][name]
+ 
+    # -----------------------------------------------------------------------
+    # Resumen global
+    # -----------------------------------------------------------------------
+    print(f"\n{'#'*50}")
+    print("  RESUMEN GLOBAL")
+    print(f"{'#'*50}")
+    print(f"  Total patches escritos  : {total_written:,}")
+    print(f"  Total excl. artefactos  : {total_excl_art:,}")
+    print(f"  Total excl. sin label   : {total_excl_nolbl:,}")
+    print(f"  Total imágenes faltantes: {total_missing:,}")
+    print(f"  Distribución global de clases:")
+    for name, count in total_per_class.items():
+        pct = 100 * count / total_written if total_written > 0 else 0
+        print(f"    [{CLASS_NAMES.index(name)}] {name:<30} {count:>9,}  ({pct:.1f}%)")
+    print(f"\n  Archivos H5 guardados en: {OUT_DIR}")
 
         
