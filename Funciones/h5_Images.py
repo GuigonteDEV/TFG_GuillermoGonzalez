@@ -51,7 +51,6 @@ import h5py
 
 # ---------------------------------------------------------------------------
 # Definición de clases — ORDEN FIJO Y DOCUMENTADO
-# Cambiar el orden aquí rompe la compatibilidad con H5 ya generados.
 # ---------------------------------------------------------------------------
 
 CLASS_NAMES = [
@@ -61,20 +60,23 @@ CLASS_NAMES = [
     'highgrade_dysplasia',
     'tumor_necrosis',
     'suspicious_for_invasion',
-    'lymphovascular_invasion',
     'adenocarcinoma',
 ]
 
 NUM_CLASSES = len(CLASS_NAMES)  # 8
 
 # Columnas que se usan solo para filtrar — el patch se descarta si alguna es != 0
-EXCLUDE_COLUMNS = ['artifact', 'resection_edge']
+EXCLUDE_COLUMNS = ['artifact', 'resection_edge', 'lymphovascular_invasion']
 
 # Columnas del CSV que no son etiquetas ni fname
 IGNORED_COLUMNS = ['burn_out_pct', 'low_saturation_pct', 'n_masks_for_slide']
 
 FNAME_COL = 'fname'
 
+
+# ---------------------------------------------------------------------------
+# Creación de tensores
+# ---------------------------------------------------------------------------
 
 def load_csv(csv_path):
     """Carga el CSV de etiquetas, eliminando columnas auxiliares."""
@@ -111,7 +113,7 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
     missing_images = []
     per_class = {name: 0 for name in CLASS_NAMES}
 
-    # Estimar número máximo (para prealocar)
+    # Estimar número máximo 
     max_samples = len(df)
 
     with h5py.File(h5_out_path, "w") as h5:
@@ -174,6 +176,9 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
                 excl_no_label += 1
                 continue
             
+            #if label_vector.sum() > 1:
+            #    continue
+            
             try:
                 arr = load_image_as_array(img_path, target_size, force_channels)
             except Exception as e:
@@ -210,17 +215,23 @@ def build_h5(df, dataset_publico_dir, n_slide, h5_out_path,  target_size=None, f
 
 if __name__ == "__main__":
 
-    # -----------------------------------------------------------------------
-    # Configuración — ajusta estas rutas a tu entorno
-    # -----------------------------------------------------------------------
     ROOT    = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
-    OUT_DIR = ROOT / 'processed_h5_multilabel'
+    OUT_DIR = ROOT / 'h5_multilabel'
     OUT_DIR.mkdir(exist_ok=True)
-    TARGET_SIZE = (256, 256)
+    TARGET_SIZE = (256,256)
     FORCE_CHANNELS = 3
 
-    # Rango de slides a procesar
-    SLIDE_RANGE = range(1, 201)
+    # Rango de slides a procesar (subset)
+    '''
+    SLIDE_RANGE = [
+        "001", "002", "011", "016", "029", "031", "035", "039", "041", "044",
+        "049", "057", "065", "070", "071", "073", "076", "079", "081", "083",
+        "092", "094", "098", "102", "106", "110", "111", "112", "113", "116",
+        "119", "121", "126", "138", "139", "142", "143", "144", "148", "149",
+        "154", "159", "160", "165", "166", "169", "170", "172", "173", "176",
+        "179", "180", "184", "185", "188", "190", "192", "193", "196", "198"
+    ]
+    '''
 
     # -----------------------------------------------------------------------
     # Acumuladores globales para resumen final
@@ -234,7 +245,7 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # Bucle por slide
     # -----------------------------------------------------------------------
-    for n_slide in SLIDE_RANGE:
+    for n_slide in range(1,201):
         n_slide_str = str(n_slide).zfill(3)
  
         DATA_DIR  = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
