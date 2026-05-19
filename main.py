@@ -2,7 +2,10 @@ from pathlib import Path
 import torch
 import os
 import numpy as np
+import pandas as pd
 from torch.utils.data import DataLoader
+import re
+import h5py
 import time as time
 import matplotlib.pyplot as plt
 import random
@@ -14,6 +17,7 @@ from tqdm import tqdm
 from Funciones.Tensor_Images import build_tensors, load_csv
 from Funciones.Build_WSI import reconstruct, load_pt
 from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_h5, Transforms, H5DatasetSoft, WeightedSampler, compute_pos_weight
+from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
 
@@ -63,9 +67,11 @@ if Create_WSI:
 # ---------------------------
 
 CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
-H5_SOFT_DIR = ROOT / 'processed_h5_soft' 
+H5_SOFT_DIR = ROOT / 'h5_multilabel' 
 IMAGE_SIZE = 256
 BATCH_SIZE = 32 
+NUM_FOLDS = 5
+FOLD_CONFIG = 1
 
 #Inicio cronómetro
 start_time = time.time()
@@ -77,8 +83,21 @@ start_time = time.time()
 train_idx, val_idx = Dataset_Division(CSV_PATH)
 
 pt_files = list(H5_SOFT_DIR.glob("*.h5"))
-pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
-pt_files = np.array(pt_files)
+#pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
+#pt_files = np.array(pt_files)
+
+
+
+folds_files, wsi_data = folds_creation(pt_files, NUM_FOLDS)
+
+folds_statistics(pt_files, folds_files, NUM_FOLDS)
+
+train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_FOLDS)
+
+print(train_idx)
+print(val_idx)
+print(test_idx)
+
 
 train_files = pt_files[train_idx]
 val_files = pt_files[val_idx]
@@ -321,3 +340,4 @@ for t in range(epochs):
 
 end_time = time.time()
 dense_elapsed_time = end_time - start_time
+
