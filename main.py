@@ -16,7 +16,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from Funciones.Tensor_Images import build_tensors, load_csv
 from Funciones.Build_WSI import reconstruct, load_pt
-from Funciones.Augmentation_Dataloader import Dataset_Division, summarize_file_h5, Transforms, H5DatasetSoft, WeightedSampler, compute_pos_weight
+from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMultilabel, compute_multilabel_metrics, print_metrics
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
@@ -25,9 +25,50 @@ from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, ave
 # Configuración general universal
 # ---------------------------
 
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+set_seed(42)
+
+CLASS_NAMES = [
+    'normal',
+    'lowgrade_dysplasia',
+    'inflammation',
+    'highgrade_dysplasia',
+    'tumor_necrosis',
+    'suspicious_for_invasion',
+    'adenocarcinoma',
+]
+
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
 
 Create_WSI = False
+
+CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
+H5_FILES = ROOT / 'h5_multilabel' 
+IMAGE_SIZE = 256
+BATCH_SIZE = 32
+NUM_CLASSES = len(CLASS_NAMES)
+LR         = 1e-4
+WEIGHT_DECAY = 1e-3
+EPOCHS = 15
+
+# ---------------------------
+# Configuración de Folds
+# ---------------------------
+NUM_FOLDS = 5
+FOLD_CONFIG = 1
+
+# ---------------------------
+# Configuración de Estrategias
+# ---------------------------
+DATA_STRATEGY = 'None'  # Opciones: 'None', 'CUS', 'ROS', 'WS'
+ALGO_STRATEGY = 'None'  # Opciones: 'None', 'Focal', 'PW'
 
 
 ################################
@@ -62,31 +103,16 @@ if Create_WSI:
 # ---------------------------
 ################################
 
-# ---------------------------
-# Configuración general
-# ---------------------------
-
-CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
-H5_SOFT_DIR = ROOT / 'h5_multilabel' 
-IMAGE_SIZE = 256
-BATCH_SIZE = 32 
-NUM_FOLDS = 5
-FOLD_CONFIG = 1
-
 #Inicio cronómetro
 start_time = time.time()
 
 # ---------------------------
-#Creación índices Dataset
+# Creación índices Dataset
 # ---------------------------
 
-train_idx, val_idx = Dataset_Division(CSV_PATH)
-
-pt_files = list(H5_SOFT_DIR.glob("*.h5"))
-#pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
-#pt_files = np.array(pt_files)
-
-
+pt_files = list(H5_FILES.glob("*.h5"))
+pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
+pt_files = np.array(pt_files)
 
 folds_files, wsi_data = folds_creation(pt_files, NUM_FOLDS)
 
@@ -94,65 +120,29 @@ folds_statistics(pt_files, folds_files, NUM_FOLDS)
 
 train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_FOLDS)
 
-print(train_idx)
-print(val_idx)
-print(test_idx)
-
-
 train_files = pt_files[train_idx]
 val_files = pt_files[val_idx]
 
-
-train_imgs, train_tumors, train_notumors, t_adenocarcinoma, t_suspicious_for_invasion, t_highgrade_dysplasia, t_tumor_necrosis, t_lowgrade_dysplasia, t_inflammation, t_normal = summarize_file_h5(train_files)
-print('###################')
-val_imgs, val_tumors, val_notumors, v_adenocarcinoma, v_suspicious_for_invasion, v_highgrade_dysplasia, v_tumor_necrosis, v_lowgrade_dysplasia, v_inflammation, v_normal = summarize_file_h5(val_files)
-
-print("========== TRAIN ==========")
-print(f"Imágenes totales: {train_imgs}")
-print(f"Tumor: {train_tumors}")
-print(f"No tumor: {train_notumors}")
-print(f"Adenocarcinoma: {t_adenocarcinoma}")
-print(f"Suspicious for invasion: {t_suspicious_for_invasion}")
-print(f"High-grade dysplasia: {t_highgrade_dysplasia}")
-print(f"Tumor necrosis: {t_tumor_necrosis}")
-print(f"Low-grade dysplasia: {t_lowgrade_dysplasia}")
-print(f"Inflammation: {t_inflammation}")
-print(f"Normal: {t_normal}")
-
-print("\n========== VALIDATION ==========")
-print(f"Imágenes totales: {val_imgs}")
-print(f"Tumor: {val_tumors}")
-print(f"No tumor: {val_notumors}")
-print(f"Adenocarcinoma: {v_adenocarcinoma}")
-print(f"Suspicious for invasion: {v_suspicious_for_invasion}")
-print(f"High-grade dysplasia: {v_highgrade_dysplasia}")
-print(f"Tumor necrosis: {v_tumor_necrosis}")
-print(f"Low-grade dysplasia: {v_lowgrade_dysplasia}")
-print(f"Inflammation: {v_inflammation}")
-print(f"Normal: {v_normal}")
+# --- Resumen de distribución de clases ---
+train_stats = summarize_h5_files(train_files)
+val_stats   = summarize_h5_files(val_files)
+print_split_summary("TRAIN",      train_stats)
+print_split_summary("VALIDATION", val_stats)
 
 
 # ---------------------------
-#Inicialización Transforms Augmentation
+# Inicialización Transforms Augmentation
 # ---------------------------
 
 train_transforms, val_transforms = Transforms(IMAGE_SIZE)
 
 
 # ---------------------------
-# Creación subset
+# Creación Dataset
 # ---------------------------
 
-subset_train_idx = train_idx[:int(len(train_idx) * 0.1)]
-subset_val_idx = val_idx[:int(len(val_idx) * 0.1)]
-
-
-# ---------------------------
-# Creación subset
-# ---------------------------
-
-train_dataset = H5DatasetSoft(train_files, transform = train_transforms)
-val_dataset = H5DatasetSoft(val_files, transform = val_transforms)
+train_dataset = H5DatasetMultilabel(train_files, transform = train_transforms)
+val_dataset = H5DatasetMultilabel(val_files, transform = val_transforms)
 
 
 # ---------------------------
@@ -166,10 +156,32 @@ val_dataset = H5DatasetSoft(val_files, transform = val_transforms)
 # DataLoaders
 # ---------------------------
 
-train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = True, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
+train_sampler = None
+shuffle_train = True
 
+if DATA_STRATEGY == 'WS':
+    print("Aplicando: Weighted Sampler")
+    shuffle_train = False 
+
+elif DATA_STRATEGY == 'ROS':
+    print("Aplicando: Random Over-Sampling")
+    
+elif DATA_STRATEGY == 'CUS':
+    print("Aplicando: Cluster Under-Sampling")
+
+elif DATA_STRATEGY == 'None':
+    print("Aplicando: Baseline (Datos originales)")
+
+else:
+    raise ValueError(f"Estrategia de datos desconocida: {DATA_STRATEGY}")
+
+
+#¡¡IMPORTANTE!! añadir num_workers si se usa GPU
 #Las especificaciones de num_workers puede variar segun ordenador
+
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False)
+
 
 ################################
 # ---------------------------
@@ -177,167 +189,223 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True)
 # ---------------------------
 ################################
 
-epochs = 4
-
 
 # ---------------------------
-# Modelo ResNet18
+# Modelo CNN
 # ---------------------------
-class ResNet18(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.backbone = models.resnet18()
-        in_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Sequential(
-            nn.Dropout(0.2),
-            nn.Linear(in_features, 1)
-        )  # salida escalar
-
-    def forward(self, x):
-        return self.backbone(x) 
-
 class EfficientNet(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        num_classes: int,
+        freeze_backbone: bool = True,
+    ):
         super().__init__()
-        self.backbone = models.efficientnet_b2(weights="IMAGENET1K_V1")
+
+        self.backbone = models.efficientnet_b3(weights="IMAGENET1K_V1")
+
+        # --- Freeze backbone completo ---
+        if freeze_backbone:
+            for param in self.backbone.features.parameters():
+                param.requires_grad = False
+
         in_features = self.backbone.classifier[1].in_features
+
         self.backbone.classifier = nn.Sequential(
-            nn.Dropout(0.3),
-            nn.Linear(in_features, 1)
+            nn.Dropout(0.5),
+            nn.Linear(in_features, num_classes)
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
+
+    def unfreeze_last_fc(self):
+        for param in self.backbone.features[-1].parameters():
+                param.requires_grad = True
     
 
-def train_loop(dataloader, model, loss_fn, optimizer, device):
+# =============================================================================
+# LOOPS DE ENTRENAMIENTO Y VALIDACIÓN
+# =============================================================================
+
+
+def train_loop(
+    dataloader, model, loss_fn, optimizer, scaler, device
+) -> tuple[float, float, float, dict, dict]:
     model.train()
-    losses = []
-    all_probs, all_labels = [], []
-
-    for X, y_soft, y_hard in tqdm(dataloader):
-        X, y_soft, y_hard = X.to(device), y_soft.float().to(device), y_hard.float().to(device)
-
+    losses     = []
+    all_probs  = []
+    all_labels = []
+ 
+    for X, y in tqdm(dataloader, desc="  train", leave=False):
+        # X : (B, 3, H, W) float   y : (B, 7) float
+        X, y = X.to(device), y.to(device)
+ 
         optimizer.zero_grad()
-
+ 
         with torch.amp.autocast("cuda"):
-            logits = model(X).squeeze(1)
-            loss = loss_fn(logits, y_soft)
-
-        
+            logits = model(X)          # (B, 7)
+            loss   = loss_fn(logits, y)
+ 
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-
+ 
         losses.append(loss.item())
+ 
+        # sigmoid aquí solo para métricas, no afecta el entrenamiento
+        probs = torch.sigmoid(logits).detach().cpu().numpy()
+        all_probs.append(probs)
+        all_labels.append(y.cpu().numpy())
+ 
+    all_probs  = np.concatenate(all_probs,  axis=0)   # (N, 7)
+    all_labels = np.concatenate(all_labels, axis=0)   # (N, 7)
+ 
+    macro_roc, macro_pr, roc_per_class, pr_per_class = compute_multilabel_metrics(
+        all_probs, all_labels
+    )
+    return float(np.mean(losses)), macro_roc, macro_pr, roc_per_class, pr_per_class
 
-        probs = torch.sigmoid(logits)
 
-        # Guardar para métricas globales
-        all_probs.append(probs.detach().cpu())
-        all_labels.append(y_hard.detach().cpu())
-
-    all_probs = torch.cat(all_probs).numpy()
-    all_labels = torch.cat(all_labels).numpy()
-
-    roc = roc_auc_score(all_labels, all_probs)
-    pr  = average_precision_score(all_labels, all_probs)
-
-    return np.mean(losses), roc, pr
-
-
-def val_loop(dataloader, model, loss_fn, device):
+@torch.no_grad()
+def val_loop(
+    dataloader, model, loss_fn, device
+) -> tuple[float, float, float, dict, dict]:
     model.eval()
-    losses = []
-    all_probs, all_labels = [], []
+    losses     = []
+    all_probs  = []
+    all_labels = []
+ 
+    for X, y in tqdm(dataloader, desc="  val  ", leave=False):
+        X, y = X.to(device), y.to(device)
+ 
+        logits = model(X)              # (B, 7)
+        loss   = loss_fn(logits, y)
+        losses.append(loss.item())
+ 
+        probs = torch.sigmoid(logits).cpu().numpy()
+        all_probs.append(probs)
+        all_labels.append(y.cpu().numpy())
+ 
+    all_probs  = np.concatenate(all_probs,  axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+ 
+    macro_roc, macro_pr, roc_per_class, pr_per_class = compute_multilabel_metrics(
+        all_probs, all_labels
+    )
+    return float(np.mean(losses)), macro_roc, macro_pr, roc_per_class, pr_per_class
+ 
 
-    with torch.no_grad():
-        for X, y_soft, y_hard in tqdm(dataloader):
-            X, y_soft, y_hard = X.to(device), y_soft.float().to(device), y_hard.float().to(device)
-            logits = model(X).squeeze(1)
-            loss = loss_fn(logits, y_soft)
-            losses.append(loss.item())
-
-            probs = torch.sigmoid(logits)
-
-            all_probs.append(probs.cpu())
-            all_labels.append(y_hard.cpu())
-
-    all_probs = torch.cat(all_probs).numpy()
-    all_labels = torch.cat(all_labels).numpy()
-
-    roc = roc_auc_score(all_labels, all_probs)
-    pr  = average_precision_score(all_labels, all_probs)
-
-    return np.mean(losses), roc, pr
-
-# -----------------------------
-# DEVICE Y SCALER
-# -----------------------------
+# =============================================================================
+# INICIALIZACIÓN
+# =============================================================================
+ 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-scaler = torch.amp.GradScaler("cuda")
-model = EfficientNet().to(device)
+print(f"\nDispositivo: {device}")
+ 
+scaler  = torch.amp.GradScaler("cuda")
+model   = EfficientNet(num_classes=NUM_CLASSES).to(device)
+#loss_fn = build_loss(train_files, device)
 
-# -----------------------------
-# POS WEIGHT
-# -----------------------------
-pos_weight = compute_pos_weight(train_files).to(device)
-loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+if ALGO_STRATEGY == 'PW':
+    print("Aplicando Loss: BCE con Pos Weights (PW)")
 
 
-# -----------------------------
-# FASE 2: descongelar último bloque del backbone
-# -----------------------------
+elif ALGO_STRATEGY == 'Focal':
+    print("Aplicando Loss: Focal Loss")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=1)
+elif ALGO_STRATEGY == 'None':
+    print("Aplicando Loss: Baseline (BCE pura)")
+    loss_fn = nn.BCEWithLogitsLoss()
 
-train_losses = []
-test_losses = []
-train_prs = []
-val_prs = []
-train_rocs = []
-val_rocs = []
+else:
+    raise ValueError(f"Estrategia de algoritmo desconocida: {ALGO_STRATEGY}")
 
-output_dir = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto\Codigo\Model_Checkpoints')
-output_dir.mkdir(exist_ok=True)
+ 
+optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+ 
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer, T_max=EPOCHS, eta_min=1e-6
+)
+ 
+ 
+# =============================================================================
+# HISTÓRICO DE MÉTRICAS
+# =============================================================================
+ 
+history = {
+    'train_loss': [], 'val_loss':    [],
+    'train_roc':  [], 'val_roc':     [],
+    'train_pr':   [], 'val_pr':      [],
+}
+ 
+best_val_pr = 0.0
+ 
+# =============================================================================
+# BUCLE DE ENTRENAMIENTO
+# =============================================================================
 
-best_pr = 0
-
-# -----------------------------
-# TRAIN LOOP 
-# -----------------------------
-for t in range(epochs):
-    print(f"Epoch {t+1}\n-------------------------------")
-    
-    train_loss, train_roc, train_pr = train_loop(train_loader, model, loss_fn, optimizer, device)
-    val_loss, val_roc, val_pr = val_loop(val_loader, model, loss_fn, device)
-
-    scheduler.step(val_loss)
-
-    train_losses.append(train_loss)
-    test_losses.append(val_loss)
-    train_prs.append(train_pr)
-    val_prs.append(val_pr)
-    train_rocs.append(train_roc)
-    val_rocs.append(val_roc)
-
-    if val_pr > best_pr:
-        best_pr = val_pr
+CKPT_DIR = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
+CKPT_DIR.mkdir(exist_ok=True)
+ 
+for epoch in range(1, EPOCHS + 1):
+    if epoch == 11:
+        model.unfreeze_last_fc()
+        print("Unfreeze")
+    print(f"\n{'='*60}")
+    print(f"  Epoch {epoch}/{EPOCHS}")
+    print(f"{'='*60}")
+ 
+    train_loss, train_roc, train_pr, train_roc_cls, train_pr_cls = train_loop(
+        train_loader, model, loss_fn, optimizer, scaler, device
+    )
+    val_loss, val_roc, val_pr, val_roc_cls, val_pr_cls = val_loop(
+        val_loader, model, loss_fn, device
+    )
+ 
+    scheduler.step()
+ 
+    # --- Guardar histórico ---
+    history['train_loss'].append(train_loss)
+    history['val_loss'].append(val_loss)
+    history['train_roc'].append(train_roc)
+    history['val_roc'].append(val_roc)
+    history['train_pr'].append(train_pr)
+    history['val_pr'].append(val_pr)
+ 
+    # --- Imprimir métricas ---
+    print_metrics("TRAIN", train_loss, train_roc, train_pr, train_roc_cls, train_pr_cls)
+    print_metrics("VAL  ", val_loss,   val_roc,   val_pr,   val_roc_cls,   val_pr_cls)
+    print(f"\n  LR actual: {optimizer.param_groups[0]['lr']:.2e}")
+ 
+    # --- Checkpoint si mejora PR-AUC macro en validación ---
+    if val_pr > best_val_pr:
+        best_val_pr = val_pr
         checkpoint = {
-            'epoch': t+1,
-            'model_state_dict': model.state_dict(),
+            'epoch':                epoch,
+            'model_state_dict':     model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': val_loss,
-            'metrics': val_pr
+            'val_loss':             val_loss,
+            'val_pr_macro':         val_pr,
+            'val_roc_macro':        val_roc,
+            'val_pr_per_class':     val_pr_cls,
+            'val_roc_per_class':    val_roc_cls,
+            'class_names':          CLASS_NAMES,
         }
-        torch.save(checkpoint, os.path.join(output_dir, "best_model.pth"))
+        ckpt_path = CKPT_DIR / "best_model.pth"
+        torch.save(checkpoint, ckpt_path)
+        print(f"\n Checkpoint guardado (PR-macro={val_pr:.4f})  →  {ckpt_path}")
+ 
+ 
+# =============================================================================
+# RESUMEN FINAL
+# =============================================================================
+ 
+elapsed = time.time() - start_time
+print(f"\n{'#'*60}")
+print(f"  Entrenamiento completado en {elapsed/60:.1f} min")
+print(f"  Mejor val PR-macro: {best_val_pr:.4f}")
+print(f"  Checkpoint en:      {CKPT_DIR / 'best_model.pth'}")
+print(f"{'#'*60}")
 
-    print(f"Train Loss: {train_loss:.4f}, ROC: {train_roc:.4f}, PR: {train_pr:.4f}")
-    print(f"Val   Loss: {val_loss:.4f}, ROC: {val_roc:.4f}, PR: {val_pr:.4f}")
-    print("Current learning rate:", scheduler.get_last_lr())
-
-end_time = time.time()
-dense_elapsed_time = end_time - start_time
 

@@ -16,6 +16,7 @@ from sklearn.model_selection import train_test_split
 import random
 from tqdm import tqdm
 import h5py
+from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
 
 # ---------------------------
@@ -26,6 +27,15 @@ ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
 IMAGE_SIZE = 256  
 RANDOM_SEED = 42
 VAL_FRACTION = 0.15
+CLASS_NAMES = [
+    'normal',
+    'lowgrade_dysplasia',
+    'inflammation',
+    'highgrade_dysplasia',
+    'tumor_necrosis',
+    'suspicious_for_invasion',
+    'adenocarcinoma',
+]
 
 
 # ---------------------------
@@ -62,59 +72,77 @@ def Dataset_Division(CSV_PATH):
 
 # calcular patch-level distribuciones iniciales
 
-def summarize_file_list(idx, CSV_PATH):
-    strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI = Read_CSV(CSV_PATH)
-    tot_patches = np.array(tot_patches.to_numpy())
-    tumor_patches = np.array(tumor_patches.to_numpy())
-    no_tumor_patches = np.array(no_tumor_patches.to_numpy())
-    patches = int(tot_patches[idx].sum())
-    tumors = int(tumor_patches[idx].sum())
-    notumors = int(no_tumor_patches[idx].sum())
+def summarize_h5_files(h5_files) -> dict:
     
-    return patches, tumors, notumors
-
-def summarize_file_list_h5(h5_files):
-    tumors = 0
-    notumors = 0
-    patches = 0
+    per_class     = {name: 0 for name in CLASS_NAMES}
+    total_patches = 0
+ 
     for h5_path in h5_files:
         with h5py.File(h5_path, "r") as h5:
-            labels = h5["labels_hard"][:]
-            tumors += (labels == 1).sum()
-            notumors += (labels == 0).sum()
-            patches += len(labels)
-    
-    return patches, tumors, notumors
+            labels = h5["labels"][:]
+            total_patches += labels.shape[0]
+            for i, name in enumerate(CLASS_NAMES):
+                per_class[name] += int(labels[:,i].sum())
+ 
+    return {"total_patches": total_patches, "per_class": per_class}
+ 
+ 
+def print_split_summary(name: str, stats: dict) -> None:
+    total = stats["total_patches"]
+    print(f"\n========== {name} ==========")
+    print(f"  Patches totales : {total:,}")
+    for class_name, count in stats["per_class"].items():
+        pct = 100 * count / total if total > 0 else 0.0
+        print(f"  [{CLASS_NAMES.index(class_name)}] {class_name:<30} {count:>8,}  ({pct:.1f}%)")
+        
+        
+# =============================================================================
+# MÉTRICAS MULTILABEL
+# =============================================================================
 
-def summarize_file_h5(h5_files):
-    tumors = 0
-    notumors = 0
-    patches = 0
-    adenocarcinoma = 0
-    suspicious_for_invasion = 0
-    highgrade_dysplasia = 0
-    tumor_necrosis = 0
-    lowgrade_dysplasia = 0
-    inflammation = 0
-    normal = 0
-    for h5_path in h5_files:
-        with h5py.File(h5_path, "r") as h5:
-            labels_hard = h5["labels_hard"][:]
-            labels_soft = h5["labels_soft"][:]
-            tumors += (labels_hard == 1).sum()
-            notumors += (labels_hard == 0).sum()
-            adenocarcinoma += (labels_soft == 1).sum()
-            suspicious_for_invasion += (labels_soft == 0.95).sum()
-            highgrade_dysplasia += (labels_soft == 0.85).sum()
-            tumor_necrosis += (labels_soft == 0.6).sum()
-            lowgrade_dysplasia += (labels_soft == 0.35).sum()
-            inflammation += (labels_soft == 0.2).sum()
-            normal += (labels_soft == 0.0).sum()
-            patches += len(labels_hard)
-            if any(labels_soft == 0.95):
-                print(h5_path)
-    
-    return patches, tumors, notumors, adenocarcinoma, suspicious_for_invasion, highgrade_dysplasia, tumor_necrosis, lowgrade_dysplasia, inflammation, normal
+def compute_multilabel_metrics(
+    all_probs:  np.ndarray,   # (N, NUM_CLASSES)  float
+    all_labels: np.ndarray,   # (N, NUM_CLASSES)  int/float
+) -> tuple[float, float, dict, dict]:
+    roc_per_class = {}
+    pr_per_class  = {}
+    if np.isnan(all_probs).any():
+        print("  [WARN] NaN detectado en probabilidades — métricas no disponibles esta época")
+        nan_dict = {name: float('nan') for name in CLASS_NAMES}
+        return float('nan'), float('nan'), nan_dict, nan_dict
+ 
+    for i, name in enumerate(CLASS_NAMES):
+        y_true = all_labels[:, i]
+        y_prob = all_probs[:, i]
+ 
+        # Si no hay positivos en este split, la métrica no está definida
+        if y_true.sum() == 0 or (1 - y_true).sum() == 0:
+            roc_per_class[name] = float('nan')
+            pr_per_class[name]  = float('nan')
+            continue
+ 
+        roc_per_class[name] = roc_auc_score(y_true, y_prob)
+        pr_per_class[name]  = average_precision_score(y_true, y_prob)
+ 
+    valid_rocs = [v for v in roc_per_class.values() if not np.isnan(v)]
+    valid_prs  = [v for v in pr_per_class.values()  if not np.isnan(v)]
+ 
+    macro_roc = float(np.mean(valid_rocs)) if valid_rocs else float('nan')
+    macro_pr  = float(np.mean(valid_prs))  if valid_prs  else float('nan')
+ 
+    return macro_roc, macro_pr, roc_per_class, pr_per_class
+ 
+ 
+def print_metrics(split: str, loss: float, macro_roc: float, macro_pr: float,
+                  roc_per_class: dict, pr_per_class: dict) -> None:
+    print(f"\n  [{split}]  loss={loss:.4f}  ROC-macro={macro_roc:.4f}  PR-macro={macro_pr:.4f}")
+    for name in CLASS_NAMES:
+        roc = roc_per_class[name]
+        pr  = pr_per_class[name]
+        roc_str = f"{roc:.4f}" if not np.isnan(roc) else "  n/a "
+        pr_str  = f"{pr:.4f}"  if not np.isnan(pr)  else "  n/a "
+        print(f"    [{CLASS_NAMES.index(name)}] {name:<30}  ROC={roc_str}  PR={pr_str}")
+        
 
 # ---------------------------
 # Definir augmentations on-the-fly
@@ -169,68 +197,40 @@ def compute_pos_weight(h5_files):
     return torch.tensor([(n_neg / n_pos)], dtype=torch.float32)
 
 # ---------------------------
-# Dataset H5 Soft
-# ---------------------------
-    
-class H5DatasetSoft(Dataset):
+# Dataset H5 
+# ---------------------------    
+class H5DatasetMultilabel(Dataset):
     def __init__(self, h5_files, transform=None):
-        self.h5_files = list(h5_files)
         self.transform = transform
-
-        self.index = []  # (h5_path, local_idx)
-
-        for h5_path in self.h5_files:
+        self.index     = []   # lista de (h5_path, local_idx)
+ 
+        for h5_path in h5_files:
             with h5py.File(h5_path, "r") as h5:
                 n = h5["images"].shape[0]
             for i in range(n):
-                self.index.append((h5_path, i))
-
-    def __len__(self):
+                self.index.append((str(h5_path), i))
+ 
+    def __len__(self) -> int:
         return len(self.index)
-
+ 
     def __getitem__(self, idx):
         h5_path, local_idx = self.index[idx]
-
+ 
         with h5py.File(h5_path, "r") as h5:
-            img = h5["images"][local_idx]
-            label_soft = h5["labels_soft"][local_idx]
-            label_hard = h5["labels_hard"][local_idx]
-
+            img    = h5["images"][local_idx]          
+            labels = h5["labels"][local_idx]
+ 
+        # Imagen: uint8 numpy → PIL → transforms → FloatTensor (3, H, W)
         if self.transform:
             img = to_pil_image(img)
-            img = self.transform(img)   # aquí ya sale tensor normalizado
+            img = self.transform(img)
         else:
-            img = torch.from_numpy(img).permute(2,0,1).float() / 255.0
-
-        return img, label_soft, label_hard
-
-
-
-# ---------------------------
-# Generación Dataset train / val
-# ---------------------------
-
-#No lazy
-'''
-def generate_dataset(files):
-    all_images = []
-    all_labels = []
-    for f in files:
-        data = torch.load(f)
-        all_images.append(data['images'])  # [N, C, H, W]
-        all_labels.append(data['labels'])  # [N]
-    
-    all_images = torch.cat(all_images, dim=0)
-    all_labels = torch.cat(all_labels, dim=0)
-    
-    return all_images, all_labels
-
-train_images, train_labels = generate_dataset(train_files)
-val_images, val_labels = generate_dataset(val_files)
-        
-train_dataset = PatchesDataset(train_images, train_labels, transform=train_transforms)
-val_dataset = PatchesDataset(val_images, val_labels, transform=val_transforms)
-'''
+            img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+ 
+        # Labels: uint8 numpy → FloatTensor (8,)
+        labels = torch.from_numpy(labels.copy()).float()
+ 
+        return img, labels
 
 
 # ---------------------------
