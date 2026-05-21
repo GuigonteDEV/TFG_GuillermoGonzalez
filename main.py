@@ -1,10 +1,10 @@
 from pathlib import Path
-import torch
 import os
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
 import re
+import json
 import h5py
 import time as time
 import matplotlib.pyplot as plt
@@ -14,9 +14,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-from Funciones.Tensor_Images import build_tensors, load_csv
-from Funciones.Build_WSI import reconstruct, load_pt
-from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMultilabel, compute_multilabel_metrics, print_metrics
+from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMultilabel, compute_multilabel_metrics, print_metrics, extract_predictions
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
@@ -25,15 +23,31 @@ from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, ave
 # Configuración general universal
 # ---------------------------
 
+# Fijamos la semilla
+
 def set_seed(seed=42):
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8' 
+    
     random.seed(seed)
     np.random.seed(seed)
+    
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = False 
 
 set_seed(42)
+
+g = torch.Generator()
+g.manual_seed(42)
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 CLASS_NAMES = [
     'normal',
@@ -47,9 +61,7 @@ CLASS_NAMES = [
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
 
-Create_WSI = False
 
-CSV_PATH = ROOT / 'Statistics' / 'WSI_stats.csv'
 H5_FILES = ROOT / 'h5_multilabel' 
 IMAGE_SIZE = 256
 BATCH_SIZE = 32
@@ -69,32 +81,6 @@ FOLD_CONFIG = 1
 # ---------------------------
 DATA_STRATEGY = 'None'  # Opciones: 'None', 'CUS', 'ROS', 'WS'
 ALGO_STRATEGY = 'None'  # Opciones: 'None', 'Focal', 'PW'
-
-
-################################
-# ---------------------------
-# Reconstrucción WSI
-# ---------------------------
-################################
-
-if Create_WSI:
-    for n_slide in range(1,201):
-        n_slide_str = str(n_slide).zfill(3)    
-        INPUT_PATH = ROOT / 'processed' / f'{n_slide_str}_tensor.pt'
-        FILL_COLOR = 255
-
-        print("Cargando:", INPUT_PATH)
-        data = load_pt(INPUT_PATH)
-        WSI_Image, WSI_Map, grid_shape, placed = reconstruct(data)
-
-        out_dir = ROOT / 'WSI_Images'
-        out_dir.mkdir(exist_ok=True)
-
-        WSI_Image.save(out_dir / f'{n_slide_str}_WSI.png')
-        WSI_Map.save(out_dir / f'{n_slide_str}_WSI_Map.png')
-
-        print(f"Reconstrucción guardada en: {out_dir / f'{n_slide_str}_WSI.png'}")
-        print(f"Rejilla (cols, rows): {grid_shape}, patches colocados: {placed}")
         
         
 ################################
@@ -123,7 +109,7 @@ train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_F
 train_files = pt_files[train_idx]
 val_files = pt_files[val_idx]
 
-# --- Resumen de distribución de clases ---
+# Resumen de distribución de clases
 train_stats = summarize_h5_files(train_files)
 val_stats   = summarize_h5_files(val_files)
 print_split_summary("TRAIN",      train_stats)
@@ -136,20 +122,12 @@ print_split_summary("VALIDATION", val_stats)
 
 train_transforms, val_transforms = Transforms(IMAGE_SIZE)
 
-
 # ---------------------------
 # Creación Dataset
 # ---------------------------
 
 train_dataset = H5DatasetMultilabel(train_files, transform = train_transforms)
 val_dataset = H5DatasetMultilabel(val_files, transform = val_transforms)
-
-
-# ---------------------------
-# WeightedRandomSampler para train
-# ---------------------------
-
-#train_sampler = WeightedSampler(train_dataset.labels)
 
 
 # ---------------------------
@@ -179,8 +157,8 @@ else:
 #¡¡IMPORTANTE!! añadir num_workers si se usa GPU
 #Las especificaciones de num_workers puede variar segun ordenador
 
-train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False)
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, sampler = train_sampler, num_workers = 4, pin_memory=True, worker_init_fn=seed_worker, generator=g)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4, worker_init_fn=seed_worker, generator=g)
 
 
 ################################
@@ -203,7 +181,7 @@ class EfficientNet(nn.Module):
 
         self.backbone = models.efficientnet_b3(weights="IMAGENET1K_V1")
 
-        # --- Freeze backbone completo ---
+        # Freeze backbone completo
         if freeze_backbone:
             for param in self.backbone.features.parameters():
                 param.requires_grad = False
@@ -327,27 +305,47 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DEC
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer, T_max=EPOCHS, eta_min=1e-6
 )
- 
- 
+
+
 # =============================================================================
 # HISTÓRICO DE MÉTRICAS
 # =============================================================================
- 
+
 history = {
-    'train_loss': [], 'val_loss':    [],
-    'train_roc':  [], 'val_roc':     [],
-    'train_pr':   [], 'val_pr':      [],
+    'time': [],
+    'fold': FOLD_CONFIG,
+    'config': {
+        'EPOCHS': EPOCHS,
+        'lr': LR,
+        'strategy_data': DATA_STRATEGY,
+        'strategy_algo': ALGO_STRATEGY
+    },
+    'train': {
+        'lr': [],
+        'loss': [],
+        'roc_macro': [],
+        'pr_macro': [],
+        'roc_per_class': [], 
+        'pr_per_class': [] 
+    },
+    'val': {
+        'loss': [],
+        'roc_macro': [],
+        'pr_macro': [],
+        'roc_per_class': [], 
+        'pr_per_class': []   
+    }
 }
- 
+
 best_val_pr = 0.0
- 
+
 # =============================================================================
 # BUCLE DE ENTRENAMIENTO
 # =============================================================================
 
 CKPT_DIR = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
 CKPT_DIR.mkdir(exist_ok=True)
- 
+
 for epoch in range(1, EPOCHS + 1):
     if epoch == 11:
         model.unfreeze_last_fc()
@@ -364,35 +362,52 @@ for epoch in range(1, EPOCHS + 1):
     )
  
     scheduler.step()
+    
+    current_lr = optimizer.param_groups[0]['lr']
  
-    # --- Guardar histórico ---
-    history['train_loss'].append(train_loss)
-    history['val_loss'].append(val_loss)
-    history['train_roc'].append(train_roc)
-    history['val_roc'].append(val_roc)
-    history['train_pr'].append(train_pr)
-    history['val_pr'].append(val_pr)
+    # Guardar histórico
+    history['train']['lr'].append(float(current_lr))
+    history['train']['loss'].append(float(train_loss))
+    history['train']['roc_macro'].append(float(train_roc))
+    history['train']['pr_macro'].append(float(train_pr))
+    history['train']['roc_per_class'].append({k: float(v) for k, v in train_roc_cls.items()})
+    history['train']['pr_per_class'].append({k: float(v) for k, v in train_pr_cls.items()})
+
+    history['val']['loss'].append(float(val_loss))
+    history['val']['roc_macro'].append(float(val_roc))
+    history['val']['pr_macro'].append(float(val_pr))
+    history['val']['roc_per_class'].append({k: float(v) for k, v in val_roc_cls.items()})
+    history['val']['pr_per_class'].append({k: float(v) for k, v in val_pr_cls.items()})
+    
+    # Guardar JSON
+    with open(CKPT_DIR / f'fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
+        json.dump(history, f, indent=4)
  
-    # --- Imprimir métricas ---
+    # Imprimir métricas
     print_metrics("TRAIN", train_loss, train_roc, train_pr, train_roc_cls, train_pr_cls)
     print_metrics("VAL  ", val_loss,   val_roc,   val_pr,   val_roc_cls,   val_pr_cls)
     print(f"\n  LR actual: {optimizer.param_groups[0]['lr']:.2e}")
  
-    # --- Checkpoint si mejora PR-AUC macro en validación ---
+    # Checkpoint si mejora PR-AUC macro en validación 
     if val_pr > best_val_pr:
         best_val_pr = val_pr
         checkpoint = {
-            'epoch':                epoch,
-            'model_state_dict':     model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'val_loss':             val_loss,
-            'val_pr_macro':         val_pr,
-            'val_roc_macro':        val_roc,
-            'val_pr_per_class':     val_pr_cls,
-            'val_roc_per_class':    val_roc_cls,
-            'class_names':          CLASS_NAMES,
-        }
-        ckpt_path = CKPT_DIR / "best_model.pth"
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_pr_macro': val_pr,
+                'val_loss': val_loss,
+                'config': {
+                    'strategy_data': DATA_STRATEGY,
+                    'strategy_algo': ALGO_STRATEGY,
+                    'lr': LR,
+                    'weight_decay': WEIGHT_DECAY,
+                    'batch_size': BATCH_SIZE,
+                    'image_size': IMAGE_SIZE
+                },
+                'class_names': CLASS_NAMES,
+            }
+        ckpt_path = CKPT_DIR / f"best_model_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth"
         torch.save(checkpoint, ckpt_path)
         print(f"\n Checkpoint guardado (PR-macro={val_pr:.4f})  →  {ckpt_path}")
  
@@ -402,10 +417,44 @@ for epoch in range(1, EPOCHS + 1):
 # =============================================================================
  
 elapsed = time.time() - start_time
+history['time'].append(float(elapsed))
 print(f"\n{'#'*60}")
 print(f"  Entrenamiento completado en {elapsed/60:.1f} min")
 print(f"  Mejor val PR-macro: {best_val_pr:.4f}")
 print(f"  Checkpoint en:      {CKPT_DIR / 'best_model.pth'}")
 print(f"{'#'*60}")
+
+# =============================================================================
+# INFERENCIA
+# =============================================================================
+
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
+model.load_state_dict(best_checkpoint['model_state_dict'])
+model.eval()
+
+# Definimos Dataloader de test (que no estaba en tu main.py)
+test_files = pt_files[test_idx]
+test_dataset = H5DatasetMultilabel(test_files, transform=val_transforms)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers = 4, worker_init_fn=seed_worker, generator=g)
+
+def save_to_csv(y_true, y_prob, split_name):
+    data = {}
+    for i, cls in enumerate(CLASS_NAMES):
+        data[f"{cls}_true"] = y_true[:, i]
+        data[f"{cls}_prob"] = y_prob[:, i]
+    df = pd.DataFrame(data)
+    df.to_csv(CKPT_DIR / f"predictions_fold{FOLD_CONFIG}_{DATA_STRATEGY}_{ALGO_STRATEGY}_{split_name}.csv", index=False)
+
+# Extraer y guardar Validación
+print("Guardando predicciones de Validación...")
+y_val_true, y_val_prob = extract_predictions(val_loader, model, device)
+save_to_csv(y_val_true, y_val_prob, "val")
+
+# Extraer y guardar Test
+print("Guardando predicciones de Test...")
+y_test_true, y_test_prob = extract_predictions(test_loader, model, device)
+save_to_csv(y_test_true, y_test_prob, "test")
+
+print("\n¡Todo listo! Historial, Checkpoint y Predicciones exportadas correctamente.")
 
 

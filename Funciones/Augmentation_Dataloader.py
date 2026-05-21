@@ -37,40 +37,9 @@ CLASS_NAMES = [
     'adenocarcinoma',
 ]
 
-
-# ---------------------------
-# Division Dataset No Leakage
-# ---------------------------
-
-#Leer el CSV con info de WSI
-
-def Read_CSV(CSV_PATH):
-
-    df = pd.read_csv(CSV_PATH)
-
-    has_tumor = df['has_tumor']
-    tumor_patches = df['tumor_patches']
-    no_tumor_patches = df['no_tumor_patches']
-    tot_patches = df['total_patches']
-    paths_WSI = df['wsi_path']
-
-
-    strat_labels = np.array(has_tumor.to_numpy())
-    
-    return strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI
-
-def Dataset_Division(CSV_PATH):
-
-    strat_labels, tumor_patches, no_tumor_patches, tot_patches, paths_WSI = Read_CSV(CSV_PATH)
-
-    #División stratificada de val y train
-
-    sss = StratifiedShuffleSplit(n_splits=1, test_size=VAL_FRACTION, random_state=RANDOM_SEED)
-    train_idx, val_idx = next(sss.split(paths_WSI, strat_labels))
-    
-    return train_idx, val_idx
-
-# calcular patch-level distribuciones iniciales
+# =============================================================================
+# DISTRIBUCIONES INICIALES
+# =============================================================================
 
 def summarize_h5_files(h5_files) -> dict:
     
@@ -184,18 +153,6 @@ def Transforms(Image_SIZE):
     
     return train_transforms, val_transforms
 
-def compute_pos_weight(h5_files):
-    n_pos = 0
-    n_neg = 0
-
-    for h5_path in h5_files:
-        with h5py.File(h5_path, "r") as h5:
-            labels = h5["labels_hard"][:]
-            n_pos += (labels == 1).sum()
-            n_neg += (labels == 0).sum()
-
-    return torch.tensor([(n_neg / n_pos)], dtype=torch.float32)
-
 # ---------------------------
 # Dataset H5 
 # ---------------------------    
@@ -231,6 +188,25 @@ class H5DatasetMultilabel(Dataset):
         labels = torch.from_numpy(labels.copy()).float()
  
         return img, labels
+
+
+# ---------------------------
+# Inferencia
+# ---------------------------
+
+@torch.no_grad()
+def extract_predictions(dataloader, model, device):
+    all_probs = []
+    all_labels = []
+    for X, y in dataloader:
+        X = X.to(device)
+        logits = model(X)
+        probs = torch.sigmoid(logits).cpu().numpy()
+        all_probs.append(probs)
+        all_labels.append(y.numpy())
+    return np.vstack(all_labels), np.vstack(all_probs)
+
+
 
 
 # ---------------------------
