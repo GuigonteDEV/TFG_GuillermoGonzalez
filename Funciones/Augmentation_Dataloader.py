@@ -208,19 +208,3 @@ def extract_predictions(dataloader, model, device):
 
 
 
-
-# ---------------------------
-# WeightedRandomSampler para train
-# ---------------------------
-
-def WeightedSampler(train_dataset):
-
-    train_dataset = np.array(train_dataset.long().cpu().numpy())
-    class_counts = np.bincount(train_dataset)
-    class_weights = 1.0 / class_counts
-    sample_weights = class_weights[train_dataset]
-
-    train_sampler = WeightedRandomSampler(weights = sample_weights, num_samples = len(sample_weights), replacement = True)
-    
-    return train_sampler
-

@@ -16,6 +16,7 @@ import torch.optim as optim
 from tqdm import tqdm
 from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMultilabel, compute_multilabel_metrics, print_metrics, extract_predictions
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
+from Funciones.Balancing_methods import compute_pos_weight_efective, AsymmetricLoss, compute_sample_weights
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
 
 
@@ -140,12 +141,7 @@ shuffle_train = True
 if DATA_STRATEGY == 'WS':
     print("Aplicando: Weighted Sampler")
     shuffle_train = False 
-
-elif DATA_STRATEGY == 'ROS':
-    print("Aplicando: Random Over-Sampling")
-    
-elif DATA_STRATEGY == 'CUS':
-    print("Aplicando: Cluster Under-Sampling")
+    train_sampler = compute_sample_weights(train_files)
 
 elif DATA_STRATEGY == 'None':
     print("Aplicando: Baseline (Datos originales)")
@@ -286,10 +282,13 @@ model   = EfficientNet(num_classes=NUM_CLASSES).to(device)
 
 if ALGO_STRATEGY == 'PW':
     print("Aplicando Loss: BCE con Pos Weights (PW)")
+    pos_weight = compute_pos_weight_efective(train_files).to(device)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight = pos_weight)
 
 
-elif ALGO_STRATEGY == 'Focal':
-    print("Aplicando Loss: Focal Loss")
+elif ALGO_STRATEGY == 'ASL':
+    print("Aplicando Loss: Asymmetric Loss")
+    loss_fn = AsymmetricLoss()
 
 
 elif ALGO_STRATEGY == 'None':
