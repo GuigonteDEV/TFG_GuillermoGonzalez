@@ -22,7 +22,7 @@ CLASS_NAMES = [
 # CREACIÓN FOLDS
 # =========================
 
-def folds_creation(H5_FILES, NUM_FOLDS):
+def folds_creation(H5_FILES, NUM_FOLDS, seed):
     
     wsi_data = []
 
@@ -61,7 +61,7 @@ def folds_creation(H5_FILES, NUM_FOLDS):
     Y = np.array([d["clases_presencia"] for d in wsi_data])  
 
     # Aplicar la estratificación multilabel WSI wise
-    mskf = MultilabelStratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=52)
+    mskf = MultilabelStratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=seed)
     map_folds = {}
 
     for fold_idx, (train_idx, val_idx) in enumerate(mskf.split(X, Y)):

@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 import re
 import json
 import h5py
+import argparse
 import time as time
 import matplotlib.pyplot as plt
 import random
@@ -24,6 +25,35 @@ from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, ave
 # Configuración general universal
 # ---------------------------
 
+parser = argparse.ArgumentParser(description="Entrenamiento Biopsias HTCondor")
+parser.add_argument('--seed', type=int, default=42, help='Semilla aleatoria para reproducibilidad')
+parser.add_argument('--fold', type=int, required=True, help="Numero de fold (1-5)")
+parser.add_argument('--data', type=str, required=True, choices=['None', 'WS'])
+parser.add_argument('--algo', type=str, required=True, choices=['None', 'ASL', 'PW'])
+args = parser.parse_args()
+
+CLASS_NAMES = [
+    'normal',
+    'lowgrade_dysplasia',
+    'inflammation',
+    'highgrade_dysplasia',
+    'tumor_necrosis',
+    'suspicious_for_invasion',
+    'adenocarcinoma',
+]
+
+ROOT = Path('.') 
+
+
+H5_FILES = ROOT / 'Dataset' 
+IMAGE_SIZE = 256
+BATCH_SIZE = 32
+NUM_CLASSES = len(CLASS_NAMES)
+LR         = 1e-4
+WEIGHT_DECAY = 1e-3
+EPOCHS = 100
+SEED = args.seed
+
 # Fijamos la semilla
 
 def set_seed(seed=42):
@@ -40,48 +70,27 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False 
 
-set_seed(42)
+set_seed(SEED)
 
 g = torch.Generator()
-g.manual_seed(42)
+g.manual_seed(SEED)
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-CLASS_NAMES = [
-    'normal',
-    'lowgrade_dysplasia',
-    'inflammation',
-    'highgrade_dysplasia',
-    'tumor_necrosis',
-    'suspicious_for_invasion',
-    'adenocarcinoma',
-]
-
-ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto') 
-
-
-H5_FILES = ROOT / 'h5_multilabel' 
-IMAGE_SIZE = 256
-BATCH_SIZE = 32
-NUM_CLASSES = len(CLASS_NAMES)
-LR         = 1e-4
-WEIGHT_DECAY = 1e-3
-EPOCHS = 15
-
 # ---------------------------
 # Configuración de Folds
 # ---------------------------
 NUM_FOLDS = 5
-FOLD_CONFIG = 1
+FOLD_CONFIG = args.fold
 
 # ---------------------------
 # Configuración de Estrategias
 # ---------------------------
-DATA_STRATEGY = 'None'  # Opciones: 'None', 'CUS', 'ROS', 'WS'
-ALGO_STRATEGY = 'None'  # Opciones: 'None', 'Focal', 'PW'
+DATA_STRATEGY = args.data  # Opciones: 'None', 'CUS', 'ROS', 'WS'
+ALGO_STRATEGY = args.algo  # Opciones: 'None', 'Focal', 'PW'
         
         
 ################################
@@ -101,7 +110,7 @@ pt_files = list(H5_FILES.glob("*.h5"))
 pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
 pt_files = np.array(pt_files)
 
-folds_files, wsi_data = folds_creation(pt_files, NUM_FOLDS)
+folds_files, wsi_data = folds_creation(pt_files, NUM_FOLDS, SEED)
 
 folds_statistics(pt_files, folds_files, NUM_FOLDS)
 
@@ -256,7 +265,7 @@ def val_loop(
         loss   = loss_fn(logits, y)
         losses.append(loss.item())
  
-        probs = torch.sigmoid(logits).cpu().numpy()
+        probs = torch.sigmoid(logits).detach().cpu().numpy()
         all_probs.append(probs)
         all_labels.append(y.cpu().numpy())
  
@@ -278,7 +287,6 @@ print(f"\nDispositivo: {device}")
  
 scaler  = torch.amp.GradScaler("cuda")
 model   = EfficientNet(num_classes=NUM_CLASSES).to(device)
-#loss_fn = build_loss(train_files, device)
 
 if ALGO_STRATEGY == 'PW':
     print("Aplicando Loss: BCE con Pos Weights (PW)")
@@ -313,6 +321,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
 history = {
     'time': [],
     'fold': FOLD_CONFIG,
+    'seed': SEED,
     'config': {
         'EPOCHS': EPOCHS,
         'lr': LR,
@@ -342,11 +351,11 @@ best_val_pr = 0.0
 # BUCLE DE ENTRENAMIENTO
 # =============================================================================
 
-CKPT_DIR = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
+CKPT_DIR = ROOT / 'Model_output'
 CKPT_DIR.mkdir(exist_ok=True)
 
 for epoch in range(1, EPOCHS + 1):
-    if epoch == 11:
+    if epoch == 61:
         model.unfreeze_last_fc()
         print("Unfreeze")
     print(f"\n{'='*60}")
@@ -379,7 +388,7 @@ for epoch in range(1, EPOCHS + 1):
     history['val']['pr_per_class'].append({k: float(v) for k, v in val_pr_cls.items()})
     
     # Guardar JSON
-    with open(CKPT_DIR / f'fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
+    with open(CKPT_DIR / f'seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
         json.dump(history, f, indent=4)
  
     # Imprimir métricas
@@ -406,7 +415,7 @@ for epoch in range(1, EPOCHS + 1):
                 },
                 'class_names': CLASS_NAMES,
             }
-        ckpt_path = CKPT_DIR / f"best_model_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth"
+        ckpt_path = CKPT_DIR / f"best_model_seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth"
         torch.save(checkpoint, ckpt_path)
         print(f"\n Checkpoint guardado (PR-macro={val_pr:.4f})  →  {ckpt_path}")
  
@@ -417,6 +426,8 @@ for epoch in range(1, EPOCHS + 1):
  
 elapsed = time.time() - start_time
 history['time'].append(float(elapsed))
+with open(CKPT_DIR / f'seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
+    json.dump(history, f, indent=4)
 print(f"\n{'#'*60}")
 print(f"  Entrenamiento completado en {elapsed/60:.1f} min")
 print(f"  Mejor val PR-macro: {best_val_pr:.4f}")
@@ -427,7 +438,7 @@ print(f"{'#'*60}")
 # INFERENCIA
 # =============================================================================
 
-best_checkpoint = torch.load(CKPT_DIR / f"best_model_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_seed_{SEED}_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
 model.load_state_dict(best_checkpoint['model_state_dict'])
 model.eval()
 
@@ -442,7 +453,7 @@ def save_to_csv(y_true, y_prob, split_name):
         data[f"{cls}_true"] = y_true[:, i]
         data[f"{cls}_prob"] = y_prob[:, i]
     df = pd.DataFrame(data)
-    df.to_csv(CKPT_DIR / f"predictions_fold{FOLD_CONFIG}_{DATA_STRATEGY}_{ALGO_STRATEGY}_{split_name}.csv", index=False)
+    df.to_csv(CKPT_DIR / f"predictions_seed_{SEED}_fold{FOLD_CONFIG}_{DATA_STRATEGY}_{ALGO_STRATEGY}_{split_name}.csv", index=False)
 
 # Extraer y guardar Validación
 print("Guardando predicciones de Validación...")
