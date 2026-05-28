@@ -63,7 +63,7 @@ CLASS_NAMES = [
     'adenocarcinoma',
 ]
 
-NUM_CLASSES = len(CLASS_NAMES)  # 8
+NUM_CLASSES = len(CLASS_NAMES)  # 7
 
 # Columnas que se usan solo para filtrar — el patch se descarta si alguna es != 0
 EXCLUDE_COLUMNS = ['artifact', 'resection_edge', 'lymphovascular_invasion']
@@ -220,18 +220,6 @@ if __name__ == "__main__":
     OUT_DIR.mkdir(exist_ok=True)
     TARGET_SIZE = (256,256)
     FORCE_CHANNELS = 3
-
-    # Rango de slides a procesar (subset)
-    '''
-    SLIDE_RANGE = [
-        "001", "002", "011", "016", "029", "031", "035", "039", "041", "044",
-        "049", "057", "065", "070", "071", "073", "076", "079", "081", "083",
-        "092", "094", "098", "102", "106", "110", "111", "112", "113", "116",
-        "119", "121", "126", "138", "139", "142", "143", "144", "148", "149",
-        "154", "159", "160", "165", "166", "169", "170", "172", "173", "176",
-        "179", "180", "184", "185", "188", "190", "192", "193", "196", "198"
-    ]
-    '''
 
     # -----------------------------------------------------------------------
     # Acumuladores globales para resumen final

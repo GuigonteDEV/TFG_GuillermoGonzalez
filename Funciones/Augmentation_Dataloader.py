@@ -5,18 +5,14 @@ Paso importante previo al desarrollo de la red neuronal.'''
 
 
 import torch
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms.functional import to_pil_image
-from sklearn.model_selection import StratifiedShuffleSplit
 import numpy as np
-import pandas as pd
 from pathlib import Path
-from sklearn.model_selection import train_test_split
 import random
-from tqdm import tqdm
 import h5py
-from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
+from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score, auc
 
 
 # ---------------------------
@@ -25,8 +21,6 @@ from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, ave
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
 IMAGE_SIZE = 256  
-RANDOM_SEED = 42
-VAL_FRACTION = 0.15
 CLASS_NAMES = [
     'normal',
     'lowgrade_dysplasia',
@@ -35,6 +29,16 @@ CLASS_NAMES = [
     'tumor_necrosis',
     'suspicious_for_invasion',
     'adenocarcinoma',
+]
+
+SEVERITY_CLASSES = [
+    'normal',                  # 0 — Sano / Ausencia de patología
+    'inflammation',            # 1 — menor riesgo patológico
+    'lowgrade_dysplasia',      # 2
+    'highgrade_dysplasia',     # 3
+    'tumor_necrosis',          # 4
+    'suspicious_for_invasion', # 5
+    'adenocarcinoma',          # 6 — mayor riesgo
 ]
 
 # =============================================================================
@@ -113,6 +117,77 @@ def print_metrics(split: str, loss: float, macro_roc: float, macro_pr: float,
         print(f"    [{CLASS_NAMES.index(name)}] {name:<30}  ROC={roc_str}  PR={pr_str}")
         
 
+def compute_binary_metrics(
+    all_probs: np.ndarray,  
+    all_labels: np.ndarray, 
+) -> tuple[float, float, float]:
+    """
+    Calcula las métricas para el enfoque binario.
+    Devuelve: (ROC AUC, Average Precision, PR AUC)
+    """
+    
+    if np.isnan(all_probs).any():
+        print("  [WARN] NaN detectado en probabilidades — métricas no disponibles esta época")
+        return float('nan'), float('nan'), float('nan')
+ 
+    if all_labels.sum() == 0 or (1 - all_labels).sum() == 0:
+        print("  [WARN] El split no contiene ambas clases (0 y 1) — métricas no definidas")
+        return float('nan'), float('nan'), float('nan')
+ 
+    roc_auc = float(roc_auc_score(all_labels, all_probs))
+    
+    precisions, recalls, _ = precision_recall_curve(all_labels, all_probs)
+    pr_auc = float(auc(recalls, precisions))
+ 
+    return roc_auc, pr_auc
+
+def compute_multiclass_metrics(
+    all_probs:  np.ndarray,   # Matriz Softmax:  (N, NUM_CLASSES) float
+    all_labels: np.ndarray, # Vector plano:     (N,) con enteros (0, 1, 2...)
+) -> tuple[float, dict]:
+    """
+    Calcula de forma eficiente el F1-Macro global y el F1-Score desglosado
+    por cada una de las patologías.
+    """
+    if np.isnan(all_probs).any():
+        print("  [WARN] NaN detectado en probabilidades — métricas no disponibles esta época")
+        nan_dict = {name: float('nan') for name in CLASS_NAMES}
+        return float('nan'), nan_dict
+ 
+    all_preds = np.argmax(all_probs, axis=1)
+
+    class_indices = list(range(len(SEVERITY_CLASSES)))
+
+    f1_values = f1_score(
+        all_labels, 
+        all_preds, 
+        average=None, 
+        labels=class_indices, 
+        zero_division=0
+    )
+    
+    f1_per_class = {name: float(f1_values[i]) for i, name in enumerate(SEVERITY_CLASSES)}
+ 
+    macro_f1 = float(f1_score(
+        all_labels, 
+        all_preds, 
+        average='macro', 
+        labels=class_indices, 
+        zero_division=0
+    ))
+ 
+    return macro_f1, f1_per_class
+
+def print_metrics_multiclass(split: str, loss: float, macro_f1: float, f1_per_class: dict) -> None:
+    # Imprime el resumen global del split (Train o Val)
+    print(f"\n  [{split}]  loss={loss:.4f}  F1-macro={macro_f1:.4f}")
+    
+    # Desglose por cada una de las patologías
+    for name in SEVERITY_CLASSES:
+        f1 = f1_per_class[name]
+        f1_str = f"{f1:.4f}" if not np.isnan(f1) else "  n/a "
+        print(f"    [{SEVERITY_CLASSES.index(name)}] {name:<30}  F1={f1_str}")
+
 # ---------------------------
 # Definir augmentations on-the-fly
 # ---------------------------
@@ -189,6 +264,77 @@ class H5DatasetMultilabel(Dataset):
  
         return img, labels
 
+class H5DatasetBinary(Dataset):
+    def __init__(self, h5_files, transform=None):
+        self.transform = transform
+        self.index     = []   # lista de (h5_path, local_idx)
+ 
+        for h5_path in h5_files:
+            with h5py.File(h5_path, "r") as h5:
+                n = h5["images"].shape[0]
+            for i in range(n):
+                self.index.append((str(h5_path), i))
+ 
+    def __len__(self) -> int:
+        return len(self.index)
+ 
+    def __getitem__(self, idx):
+        h5_path, local_idx = self.index[idx]
+ 
+        with h5py.File(h5_path, "r") as h5:
+            img    = h5["images"][local_idx]          
+            labels = h5["labels"][local_idx]
+ 
+        # Imagen: uint8 numpy → PIL → transforms → FloatTensor (3, H, W)
+        if self.transform:
+            img = to_pil_image(img)
+            img = self.transform(img)
+        else:
+            img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+ 
+        # Labels: uint8 numpy → FloatTensor (8,)
+        binary_value = 1.0 if labels > 0 else 0.0
+        
+        # Lo convertimos a un FloatTensor escalar
+        label_tensor = torch.tensor(binary_value, dtype=torch.float32)
+ 
+        return img, label_tensor
+    
+class H5DatasetMulticlass(Dataset):
+    def __init__(self, h5_files, transform=None):
+        self.transform = transform
+        self.index     = []   # lista de (h5_path, local_idx)
+ 
+        for h5_path in h5_files:
+            with h5py.File(h5_path, "r") as h5:
+                labels = h5["labels"][:]
+                for i, label in enumerate(labels):
+                    if label > 0:
+                        self.index.append((str(h5_path), i))
+                
+ 
+    def __len__(self) -> int:
+        return len(self.index)
+ 
+    def __getitem__(self, idx):
+        h5_path, local_idx = self.index[idx]
+ 
+        with h5py.File(h5_path, "r") as h5:
+            img    = h5["images"][local_idx]          
+            labels = h5["labels"][local_idx]
+ 
+        # Imagen: uint8 numpy → PIL → transforms → FloatTensor (3, H, W)
+        if self.transform:
+            img = to_pil_image(img)
+            img = self.transform(img)
+        else:
+            img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        
+        labels = labels - 1
+        
+        labels = torch.tensor(labels, dtype=torch.long)
+ 
+        return img, labels
 
 # ---------------------------
 # Inferencia

@@ -15,10 +15,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMultilabel, compute_multilabel_metrics, print_metrics, extract_predictions
+from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetBinary, compute_binary_metrics, print_metrics
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
-from Funciones.Balancing_methods import compute_pos_weight_efective, AsymmetricLoss, compute_sample_weights
-from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score
+from Funciones.Balancing_methods import compute_pos_weight_efective
+
 
 
 # ---------------------------
@@ -28,27 +28,16 @@ from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, ave
 parser = argparse.ArgumentParser(description="Entrenamiento Biopsias HTCondor")
 parser.add_argument('--seed', type=int, default=42, help='Semilla aleatoria para reproducibilidad')
 parser.add_argument('--fold', type=int, required=True, help="Numero de fold (1-5)")
-parser.add_argument('--data', type=str, required=True, choices=['None', 'WS'])
-parser.add_argument('--algo', type=str, required=True, choices=['None', 'ASL', 'PW'])
 args = parser.parse_args()
-
-CLASS_NAMES = [
-    'normal',
-    'lowgrade_dysplasia',
-    'inflammation',
-    'highgrade_dysplasia',
-    'tumor_necrosis',
-    'suspicious_for_invasion',
-    'adenocarcinoma',
-]
 
 ROOT = Path('.') 
 
 
-H5_FILES = ROOT / 'Dataset' 
+H5_FILES = ROOT / 'Dataset'
+H5_FILES_BINARY = ROOT / 'Dataset_multiclass'  
 IMAGE_SIZE = 256
 BATCH_SIZE = 32
-NUM_CLASSES = len(CLASS_NAMES)
+NUM_CLASSES = 1
 LR         = 1e-4
 WEIGHT_DECAY = 1e-3
 EPOCHS = 100
@@ -85,12 +74,6 @@ def seed_worker(worker_id):
 # ---------------------------
 NUM_FOLDS = 5
 FOLD_CONFIG = args.fold
-
-# ---------------------------
-# Configuración de Estrategias
-# ---------------------------
-DATA_STRATEGY = args.data  # Opciones: 'None', 'WS'
-ALGO_STRATEGY = args.algo  # Opciones: 'None', 'Focal', 'PW'
         
         
 ################################
@@ -110,20 +93,18 @@ pt_files = list(H5_FILES.glob("*.h5"))
 pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
 pt_files = np.array(pt_files)
 
+binary_files = list(H5_FILES_BINARY.glob("*.h5"))
+binary_files = sorted(binary_files, key=lambda f: int(f.stem.split('_')[0]))
+binary_files = np.array(binary_files)
+
 folds_files, wsi_data = folds_creation(pt_files, NUM_FOLDS, SEED)
 
 folds_statistics(pt_files, folds_files, NUM_FOLDS)
 
 train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_FOLDS)
 
-train_files = pt_files[train_idx]
-val_files = pt_files[val_idx]
-
-# Resumen de distribución de clases
-train_stats = summarize_h5_files(train_files)
-val_stats   = summarize_h5_files(val_files)
-print_split_summary("TRAIN",      train_stats)
-print_split_summary("VALIDATION", val_stats)
+train_files = binary_files[train_idx]
+val_files = binary_files[val_idx]
 
 
 # ---------------------------
@@ -136,8 +117,8 @@ train_transforms, val_transforms = Transforms(IMAGE_SIZE)
 # Creación Dataset
 # ---------------------------
 
-train_dataset = H5DatasetMultilabel(train_files, transform = train_transforms)
-val_dataset = H5DatasetMultilabel(val_files, transform = val_transforms)
+train_dataset = H5DatasetBinary(train_files, transform = train_transforms)
+val_dataset = H5DatasetBinary(val_files, transform = val_transforms)
 
 
 # ---------------------------
@@ -146,18 +127,6 @@ val_dataset = H5DatasetMultilabel(val_files, transform = val_transforms)
 
 train_sampler = None
 shuffle_train = True
-
-if DATA_STRATEGY == 'WS':
-    print("Aplicando: Weighted Sampler")
-    shuffle_train = False 
-    train_sampler = compute_sample_weights(train_files)
-
-elif DATA_STRATEGY == 'None':
-    print("Aplicando: Baseline (Datos originales)")
-
-else:
-    raise ValueError(f"Estrategia de datos desconocida: {DATA_STRATEGY}")
-
 
 #¡¡IMPORTANTE!! añadir num_workers si se usa GPU
 #Las especificaciones de num_workers puede variar segun ordenador
@@ -220,13 +189,13 @@ def train_loop(
     all_labels = []
  
     for X, y in tqdm(dataloader, desc="  train", leave=False):
-        # X : (B, 3, H, W) float   y : (B, 7) float
-        X, y = X.to(device), y.to(device)
+        X = X.to(device)
+        y = y.float().unsqueeze(1).to(device)
  
         optimizer.zero_grad()
  
         with torch.amp.autocast("cuda"):
-            logits = model(X)          # (B, 7)
+            logits = model(X)         
             loss   = loss_fn(logits, y)
  
         scaler.scale(loss).backward()
@@ -236,17 +205,17 @@ def train_loop(
         losses.append(loss.item())
  
         # sigmoid aquí solo para métricas, no afecta el entrenamiento
-        probs = torch.sigmoid(logits).detach().cpu().numpy()
+        probs = torch.sigmoid(logits).detach().cpu().numpy().squeeze(1)
         all_probs.append(probs)
-        all_labels.append(y.cpu().numpy())
+        all_labels.append(y.cpu().numpy().squeeze(1))
  
-    all_probs  = np.concatenate(all_probs,  axis=0)   # (N, 7)
-    all_labels = np.concatenate(all_labels, axis=0)   # (N, 7)
+    all_probs  = np.concatenate(all_probs,  axis=0)  
+    all_labels = np.concatenate(all_labels, axis=0)   
  
-    macro_roc, macro_pr, roc_per_class, pr_per_class = compute_multilabel_metrics(
+    macro_roc, macro_pr = compute_binary_metrics(
         all_probs, all_labels
     )
-    return float(np.mean(losses)), macro_roc, macro_pr, roc_per_class, pr_per_class
+    return float(np.mean(losses)), macro_roc, macro_pr
 
 
 @torch.no_grad()
@@ -259,23 +228,24 @@ def val_loop(
     all_labels = []
  
     for X, y in tqdm(dataloader, desc="  val  ", leave=False):
-        X, y = X.to(device), y.to(device)
+        X = X.to(device)
+        y = y.float().unsqueeze(1).to(device)
  
-        logits = model(X)              # (B, 7)
+        logits = model(X)             
         loss   = loss_fn(logits, y)
         losses.append(loss.item())
  
-        probs = torch.sigmoid(logits).detach().cpu().numpy()
+        probs = torch.sigmoid(logits).detach().cpu().numpy().squeeze(1)
         all_probs.append(probs)
-        all_labels.append(y.cpu().numpy())
+        all_labels.append(y.cpu().numpy().squeeze(1))
  
     all_probs  = np.concatenate(all_probs,  axis=0)
     all_labels = np.concatenate(all_labels, axis=0)
  
-    macro_roc, macro_pr, roc_per_class, pr_per_class = compute_multilabel_metrics(
+    macro_roc, macro_pr = compute_binary_metrics(
         all_probs, all_labels
     )
-    return float(np.mean(losses)), macro_roc, macro_pr, roc_per_class, pr_per_class
+    return float(np.mean(losses)), macro_roc, macro_pr
  
 
 # =============================================================================
@@ -288,23 +258,7 @@ print(f"\nDispositivo: {device}")
 scaler  = torch.amp.GradScaler("cuda")
 model   = EfficientNet(num_classes=NUM_CLASSES).to(device)
 
-if ALGO_STRATEGY == 'PW':
-    print("Aplicando Loss: BCE con Pos Weights (PW)")
-    pos_weight = compute_pos_weight_efective(train_files).to(device)
-    loss_fn = nn.BCEWithLogitsLoss(pos_weight = pos_weight)
-
-
-elif ALGO_STRATEGY == 'ASL':
-    print("Aplicando Loss: Asymmetric Loss")
-    loss_fn = AsymmetricLoss()
-
-
-elif ALGO_STRATEGY == 'None':
-    print("Aplicando Loss: Baseline (BCE pura)")
-    loss_fn = nn.BCEWithLogitsLoss()
-
-else:
-    raise ValueError(f"Estrategia de algoritmo desconocida: {ALGO_STRATEGY}")
+loss_fn = nn.BCEWithLogitsLoss()
 
  
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
@@ -325,23 +279,17 @@ history = {
     'config': {
         'EPOCHS': EPOCHS,
         'lr': LR,
-        'strategy_data': DATA_STRATEGY,
-        'strategy_algo': ALGO_STRATEGY
     },
     'train': {
         'lr': [],
         'loss': [],
-        'roc_macro': [],
-        'pr_macro': [],
-        'roc_per_class': [], 
-        'pr_per_class': [] 
+        'roc': [],
+        'pr': [],
     },
     'val': {
         'loss': [],
-        'roc_macro': [],
-        'pr_macro': [],
-        'roc_per_class': [], 
-        'pr_per_class': []   
+        'roc': [],
+        'pr': [],  
     }
 }
 
@@ -362,10 +310,10 @@ for epoch in range(1, EPOCHS + 1):
     print(f"  Epoch {epoch}/{EPOCHS}")
     print(f"{'='*60}")
  
-    train_loss, train_roc, train_pr, train_roc_cls, train_pr_cls = train_loop(
+    train_loss, train_roc, train_pr = train_loop(
         train_loader, model, loss_fn, optimizer, scaler, device
     )
-    val_loss, val_roc, val_pr, val_roc_cls, val_pr_cls = val_loop(
+    val_loss, val_roc, val_pr = val_loop(
         val_loader, model, loss_fn, device
     )
  
@@ -376,24 +324,20 @@ for epoch in range(1, EPOCHS + 1):
     # Guardar histórico
     history['train']['lr'].append(float(current_lr))
     history['train']['loss'].append(float(train_loss))
-    history['train']['roc_macro'].append(float(train_roc))
-    history['train']['pr_macro'].append(float(train_pr))
-    history['train']['roc_per_class'].append({k: float(v) for k, v in train_roc_cls.items()})
-    history['train']['pr_per_class'].append({k: float(v) for k, v in train_pr_cls.items()})
+    history['train']['roc'].append(float(train_roc))
+    history['train']['pr'].append(float(train_pr))
 
     history['val']['loss'].append(float(val_loss))
-    history['val']['roc_macro'].append(float(val_roc))
-    history['val']['pr_macro'].append(float(val_pr))
-    history['val']['roc_per_class'].append({k: float(v) for k, v in val_roc_cls.items()})
-    history['val']['pr_per_class'].append({k: float(v) for k, v in val_pr_cls.items()})
+    history['val']['roc'].append(float(val_roc))
+    history['val']['pr'].append(float(val_pr))
     
     # Guardar JSON
-    with open(CKPT_DIR / f'seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
+    with open(CKPT_DIR / f'binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
         json.dump(history, f, indent=4)
  
     # Imprimir métricas
-    print_metrics("TRAIN", train_loss, train_roc, train_pr, train_roc_cls, train_pr_cls)
-    print_metrics("VAL  ", val_loss,   val_roc,   val_pr,   val_roc_cls,   val_pr_cls)
+    print(f"\n  [TRAIN]  loss={train_loss:.4f}  ROC-macro={train_roc:.4f}  PR-macro={train_pr:.4f}")
+    print(f"\n  [VAL]  loss={val_loss:.4f}  ROC-macro={val_roc:.4f}  PR-macro={val_pr:.4f}")
     print(f"\n  LR actual: {optimizer.param_groups[0]['lr']:.2e}")
  
     # Checkpoint si mejora PR-AUC macro en validación 
@@ -406,16 +350,13 @@ for epoch in range(1, EPOCHS + 1):
                 'val_pr_macro': val_pr,
                 'val_loss': val_loss,
                 'config': {
-                    'strategy_data': DATA_STRATEGY,
-                    'strategy_algo': ALGO_STRATEGY,
                     'lr': LR,
                     'weight_decay': WEIGHT_DECAY,
                     'batch_size': BATCH_SIZE,
                     'image_size': IMAGE_SIZE
                 },
-                'class_names': CLASS_NAMES,
             }
-        ckpt_path = CKPT_DIR / f"best_model_seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth"
+        ckpt_path = CKPT_DIR / f"best_model_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth"
         torch.save(checkpoint, ckpt_path)
         print(f"\n Checkpoint guardado (PR-macro={val_pr:.4f})  →  {ckpt_path}")
  
@@ -426,45 +367,12 @@ for epoch in range(1, EPOCHS + 1):
  
 elapsed = time.time() - start_time
 history['time'].append(float(elapsed))
-with open(CKPT_DIR / f'seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}_history.json', 'w') as f:
+with open(CKPT_DIR / f'binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
     json.dump(history, f, indent=4)
 print(f"\n{'#'*60}")
 print(f"  Entrenamiento completado en {elapsed/60:.1f} min")
 print(f"  Mejor val PR-macro: {best_val_pr:.4f}")
 print(f"  Checkpoint en:      {CKPT_DIR / 'best_model.pth'}")
 print(f"{'#'*60}")
-
-# =============================================================================
-# INFERENCIA
-# =============================================================================
-
-best_checkpoint = torch.load(CKPT_DIR / f"best_model_seed_{SEED}_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
-model.load_state_dict(best_checkpoint['model_state_dict'])
-model.eval()
-
-# Definimos Dataloader de test (que no estaba en tu main.py)
-test_files = pt_files[test_idx]
-test_dataset = H5DatasetMultilabel(test_files, transform=val_transforms)
-test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers = 4, worker_init_fn=seed_worker, generator=g)
-
-def save_to_csv(y_true, y_prob, split_name):
-    data = {}
-    for i, cls in enumerate(CLASS_NAMES):
-        data[f"{cls}_true"] = y_true[:, i]
-        data[f"{cls}_prob"] = y_prob[:, i]
-    df = pd.DataFrame(data)
-    df.to_csv(CKPT_DIR / f"predictions_seed_{SEED}_fold{FOLD_CONFIG}_{DATA_STRATEGY}_{ALGO_STRATEGY}_{split_name}.csv", index=False)
-
-# Extraer y guardar Validación
-print("Guardando predicciones de Validación...")
-y_val_true, y_val_prob = extract_predictions(val_loader, model, device)
-save_to_csv(y_val_true, y_val_prob, "val")
-
-# Extraer y guardar Test
-print("Guardando predicciones de Test...")
-y_test_true, y_test_prob = extract_predictions(test_loader, model, device)
-save_to_csv(y_test_true, y_test_prob, "test")
-
-print("\n¡Todo listo! Historial, Checkpoint y Predicciones exportadas correctamente.")
 
 

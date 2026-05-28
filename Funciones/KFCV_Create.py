@@ -32,16 +32,13 @@ def folds_creation(H5_FILES, NUM_FOLDS, seed):
             
             # Matriz binaria de presencia
             
-            #presence_classes = np.max(labels, axis=0) 
+            presence_amp = np.max(labels, axis=0) 
             
             # Patches por clase
             per_class_counts = labels.sum(axis=0).astype(int)
             
             patch_count = len(labels)
             
-            presence_classes = (per_class_counts >= 10).astype(int)
-            wsi_big = int(patch_count > 1000)
-            presence_amp = np.append(presence_classes, wsi_big)
             
             # Guardamos los datos de presencia y desglose de patches
             wsi_entry = {
