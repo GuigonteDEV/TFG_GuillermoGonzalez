@@ -438,7 +438,7 @@ print(f"{'#'*60}")
 # INFERENCIA
 # =============================================================================
 
-best_checkpoint = torch.load(CKPT_DIR / f"best_model_seed_{SEED}_folder{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_seed_{SEED}_fold_{FOLD_CONFIG}_strategy_{DATA_STRATEGY}_{ALGO_STRATEGY}.pth", map_location=device)
 model.load_state_dict(best_checkpoint['model_state_dict'])
 model.eval()
 

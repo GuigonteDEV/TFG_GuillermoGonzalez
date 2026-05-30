@@ -107,9 +107,10 @@ class ASLSingleLabel(nn.Module):
     '''
     This loss is intended for single-label classification problems
     '''
-    def __init__(self, gamma_pos=0, gamma_neg=4, eps: float = 0.1, reduction='mean'):
+    def __init__(self, cost_matrix, gamma_pos=0, gamma_neg=4, eps: float = 0.1, reduction='mean'):
         super(ASLSingleLabel, self).__init__()
 
+        self.cost_matrix = cost_matrix
         self.eps = eps
         self.logsoftmax = nn.LogSoftmax(dim=-1)
         self.targets_classes = []
@@ -141,7 +142,15 @@ class ASLSingleLabel(nn.Module):
             self.targets_classes = self.targets_classes.mul(1 - self.eps).add(self.eps / num_classes)
 
         # loss calculation
-        loss = - self.targets_classes.mul(log_preds)
+        # loss calculation
+        if self.cost_matrix is not None:
+            costs = self.cost_matrix[target.long()]
+
+            # Multiplicamos la matriz target (suavizada) por log_preds y luego por los costes
+            loss = - self.targets_classes.mul(log_preds) * costs
+
+        else:
+            loss = - self.targets_classes.mul(log_preds)
 
         loss = loss.sum(dim=-1)
         if self.reduction == 'mean':

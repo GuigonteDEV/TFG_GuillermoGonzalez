@@ -32,7 +32,6 @@ CLASS_NAMES = [
 ]
 
 SEVERITY_CLASSES = [
-    'normal',                  # 0 — Sano / Ausencia de patología
     'inflammation',            # 1 — menor riesgo patológico
     'lowgrade_dysplasia',      # 2
     'highgrade_dysplasia',     # 3
@@ -303,7 +302,7 @@ class H5DatasetBinary(Dataset):
 class H5DatasetMulticlass(Dataset):
     def __init__(self, h5_files, transform=None):
         self.transform = transform
-        self.index     = []   # lista de (h5_path, local_idx)
+        self.index     = []
  
         for h5_path in h5_files:
             with h5py.File(h5_path, "r") as h5:

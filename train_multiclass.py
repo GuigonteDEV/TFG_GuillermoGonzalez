@@ -1,21 +1,17 @@
 from pathlib import Path
 import os
 import numpy as np
-import pandas as pd
 from torch.utils.data import DataLoader
-import re
 import json
-import h5py
+import pandas as pd
 import argparse
 import time as time
-import matplotlib.pyplot as plt
 import random
 from torchvision import models
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetMulticlass, compute_multiclass_metrics, print_metrics_multiclass
+from Funciones.Augmentation_Dataloader import Transforms, H5DatasetMulticlass, compute_multiclass_metrics, print_metrics_multiclass, extract_predictions
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
 from Funciones.Balancing_methods import ASLSingleLabel
 
@@ -32,7 +28,7 @@ args = parser.parse_args()
 
 ROOT = Path('.') 
 
-SEVERITY_CLASSES = [                # 0 — Sano / Ausencia de patología
+SEVERITY_CLASSES = [
     'inflammation',            # 1 — menor riesgo patológico
     'lowgrade_dysplasia',      # 2
     'highgrade_dysplasia',     # 3
@@ -196,7 +192,7 @@ def train_loop(
     all_probs  = []
     all_labels = []
  
-    for X, y in tqdm(dataloader, desc="  train", leave=False):
+    for X, y in tqdm(dataloader, desc="  train", leave=False, disable=True):
         X = X.to(device)
         y = y.long().to(device)
  
@@ -235,7 +231,7 @@ def val_loop(
     all_probs  = []
     all_labels = []
  
-    for X, y in tqdm(dataloader, desc="  val  ", leave=False):
+    for X, y in tqdm(dataloader, desc="  val  ", leave=False, disable=True):
         X = X.to(device)
         y = y.long().to(device)
  
@@ -308,7 +304,7 @@ best_val_f1 = 0.0
 # BUCLE DE ENTRENAMIENTO
 # =============================================================================
 
-CKPT_DIR = ROOT / 'Model_output'
+CKPT_DIR = ROOT / 'Model_output_multiclass'
 CKPT_DIR.mkdir(exist_ok=True)
 
 for epoch in range(1, EPOCHS + 1):
@@ -384,4 +380,27 @@ print(f"  Mejor val F1-macro: {best_val_f1:.4f}")
 print(f"  Checkpoint en:      {CKPT_DIR / 'best_model_multiclass_seed_{SEED}_fold_{FOLD_CONFIG}.pth'}")
 print(f"{'#'*60}")
 
+# =============================================================================
+# INFERENCIA
+# =============================================================================
+
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_multiclass_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
+model.load_state_dict(best_checkpoint['model_state_dict'])
+model.eval()
+
+
+def save_to_csv(y_true, y_prob, split_name):
+    data = {}
+    for i, cls in enumerate(SEVERITY_CLASSES):
+        data[f"{cls}_true"] = y_true[:, i]
+        data[f"{cls}_prob"] = y_prob[:, i]
+    df = pd.DataFrame(data)
+    df.to_csv(CKPT_DIR / f"predictions_multiclass_seed_{SEED}_fold{FOLD_CONFIG}_{split_name}.csv", index=False)
+
+# Extraer y guardar Validación
+print("Guardando predicciones de Validación...")
+y_val_true, y_val_prob = extract_predictions(val_loader, model, device)
+save_to_csv(y_val_true, y_val_prob, "val")
+
+print("\n¡Todo listo! Historial, Checkpoint y Predicciones exportadas correctamente.")
 

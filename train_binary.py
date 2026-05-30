@@ -3,21 +3,16 @@ import os
 import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
-import re
 import json
-import h5py
 import argparse
 import time as time
-import matplotlib.pyplot as plt
 import random
 from torchvision import models
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import summarize_h5_files, print_split_summary, Transforms, H5DatasetBinary, compute_binary_metrics, print_metrics
+from Funciones.Augmentation_Dataloader import Transforms, H5DatasetBinary, compute_binary_metrics, extract_predictions
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
-from Funciones.Balancing_methods import compute_pos_weight_efective
 
 
 
@@ -188,7 +183,7 @@ def train_loop(
     all_probs  = []
     all_labels = []
  
-    for X, y in tqdm(dataloader, desc="  train", leave=False):
+    for X, y in tqdm(dataloader, desc="  train", leave=False, disable=True):
         X = X.to(device)
         y = y.float().unsqueeze(1).to(device)
  
@@ -227,7 +222,7 @@ def val_loop(
     all_probs  = []
     all_labels = []
  
-    for X, y in tqdm(dataloader, desc="  val  ", leave=False):
+    for X, y in tqdm(dataloader, desc="  val  ", leave=False, disable=True):
         X = X.to(device)
         y = y.float().unsqueeze(1).to(device)
  
@@ -299,7 +294,7 @@ best_val_pr = 0.0
 # BUCLE DE ENTRENAMIENTO
 # =============================================================================
 
-CKPT_DIR = ROOT / 'Model_output'
+CKPT_DIR = ROOT / 'Model_output_binary'
 CKPT_DIR.mkdir(exist_ok=True)
 
 for epoch in range(1, EPOCHS + 1):
@@ -376,3 +371,29 @@ print(f"  Checkpoint en:      {CKPT_DIR / 'best_model.pth'}")
 print(f"{'#'*60}")
 
 
+# =============================================================================
+# INFERENCIA
+# =============================================================================
+
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
+model.load_state_dict(best_checkpoint['model_state_dict'])
+model.eval()
+
+def save_to_csv(dataset_object, y_true, y_prob, split_name):
+    image_ids = [
+        f"{Path(h5_path).stem}_patch_{local_idx}" 
+        for h5_path, local_idx in dataset_object.index
+    ]
+    data = {}
+    data[f"image_id"] = image_ids
+    data[f"y_true"] = y_true[:]
+    data[f"y_prob"] = y_prob[:]
+    df = pd.DataFrame(data)
+    df.to_csv(CKPT_DIR / f"predictions_binary_seed_{SEED}_fold{FOLD_CONFIG}_{split_name}.csv", index=False)
+
+# Extraer y guardar Validación
+print("Guardando predicciones de Validación...")
+y_val_true, y_val_prob = extract_predictions(val_loader, model, device)
+save_to_csv(val_dataset, y_val_true, y_val_prob, "val")
+
+print("\n¡Todo listo! Historial, Checkpoint y Predicciones exportadas correctamente.")
