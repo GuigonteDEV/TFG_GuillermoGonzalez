@@ -334,6 +334,39 @@ class H5DatasetMulticlass(Dataset):
         labels = torch.tensor(labels, dtype=torch.long)
  
         return img, labels
+    
+class H5DatasetInferencia(Dataset):
+    def __init__(self, h5_files, transform=None):
+        self.transform = transform
+        self.index     = []
+ 
+        for h5_path in h5_files:
+            with h5py.File(h5_path, "r") as h5:
+                n = h5["images"].shape[0]
+                for i in range(n):
+                    self.index.append((str(h5_path), i))
+                
+ 
+    def __len__(self) -> int:
+        return len(self.index)
+ 
+    def __getitem__(self, idx):
+        h5_path, local_idx = self.index[idx]
+ 
+        with h5py.File(h5_path, "r") as h5:
+            img    = h5["images"][local_idx]          
+            labels = h5["labels"][local_idx]
+ 
+        # Imagen: uint8 numpy → PIL → transforms → FloatTensor (3, H, W)
+        if self.transform:
+            img = to_pil_image(img)
+            img = self.transform(img)
+        else:
+            img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        
+        labels = torch.tensor(labels, dtype=torch.long)
+ 
+        return img, labels
 
 # ---------------------------
 # Inferencia
@@ -351,5 +384,27 @@ def extract_predictions(dataloader, model, device):
         all_labels.append(y.numpy())
     return np.vstack(all_labels), np.vstack(all_probs)
 
+@torch.no_grad()
+def extract_predictions_binary(dataloader, model, device):
+    all_probs = []
+    all_labels = []
+    for X, y in dataloader:
+        X = X.to(device)
+        logits = model(X)
+        probs = torch.sigmoid(logits).cpu().numpy().squeeze(1)
+        all_probs.append(probs)
+        all_labels.append(y.cpu().numpy())
+    return np.concatenate(all_labels), np.concatenate(all_probs)
 
+@torch.no_grad()
+def extract_predictions_multiclass(dataloader, model, device):
+    all_probs = []
+    all_labels = []
+    for X, y in dataloader:
+        X = X.to(device)
+        logits = model(X)
+        probs = torch.softmax(logits, dim=1).cpu().numpy()
+        all_probs.append(probs)
+        all_labels.append(y.numpy())
+    return np.concatenate(all_labels), np.concatenate(all_probs)
 

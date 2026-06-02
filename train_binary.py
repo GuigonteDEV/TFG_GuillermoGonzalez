@@ -11,7 +11,7 @@ from torchvision import models
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import Transforms, H5DatasetBinary, compute_binary_metrics, extract_predictions
+from Funciones.Augmentation_Dataloader import Transforms, H5DatasetBinary, compute_binary_metrics, extract_predictions_binary
 from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
 
 
@@ -393,7 +393,7 @@ def save_to_csv(dataset_object, y_true, y_prob, split_name):
 
 # Extraer y guardar Validación
 print("Guardando predicciones de Validación...")
-y_val_true, y_val_prob = extract_predictions(val_loader, model, device)
+y_val_true, y_val_prob = extract_predictions_binary(val_loader, model, device)
 save_to_csv(val_dataset, y_val_true, y_val_prob, "val")
 
 print("\n¡Todo listo! Historial, Checkpoint y Predicciones exportadas correctamente.")
