@@ -80,7 +80,7 @@ def load_image_as_array(
     img = Image.open(path)
     img = img.convert('RGB') if force_channels == 3 else img.convert('L')
     if target_size is not None:
-        img = img.resize(target_size, Image.BILINEAR)
+        img = img.resize(target_size, Image.BICUBIC)
     arr = np.array(img, dtype=np.uint8)
     if force_channels == 3 and arr.ndim == 2:
         arr = np.stack([arr] * 3, axis=-1)
@@ -275,10 +275,10 @@ if __name__ == "__main__":
     ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
 
     # Única carpeta de destino unificada
-    OUT_DIR = ROOT / 'h5_multiclass'
+    OUT_DIR = ROOT / 'h5_multiclass_UNI'
     OUT_DIR.mkdir(exist_ok=True)
 
-    TARGET_SIZE    = (256, 256)
+    TARGET_SIZE    = (224, 224)
     FORCE_CHANNELS = 3
 
     # Acumuladores globales para el reporte final del dataset completo
@@ -293,7 +293,7 @@ if __name__ == "__main__":
 
         DATA_DIR = ROOT / 'Dataset_Publico' / f'zoom_2_{n_slide_str}'
         CSV_PATH = DATA_DIR / f'{n_slide_str}_labels.csv'
-        H5_OUT   = OUT_DIR / f'{n_slide_str}_multiclass.h5'
+        H5_OUT   = OUT_DIR / f'{n_slide_str}_multiclass_UNI.h5'
 
         if not CSV_PATH.exists():
             print(f"[WARN] CSV no encontrado: {CSV_PATH}, saltando.")
