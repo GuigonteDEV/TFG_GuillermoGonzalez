@@ -6,11 +6,9 @@ from torch.utils.data import DataLoader
 import argparse
 import time as time
 import random
-from torchvision import models
 import torch
-import torch.nn as nn
-from Funciones.Augmentation_Dataloader import Transforms, H5DatasetMultilabel, extract_predictions
-from Funciones.KFCV_Create import folds_creation, get_dataset_split
+from src.utils import Transforms, H5DatasetMultilabel, extract_predictions, folds_creation, get_dataset_split
+from src.models import EfficientNet
 
 
 # ---------------------------
@@ -115,37 +113,6 @@ test_dataset = H5DatasetMultilabel(test_files, transform=val_transforms)
 
 val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 0, worker_init_fn=seed_worker, generator=g)
 test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers = 0, worker_init_fn=seed_worker, generator=g)
-
-
-
-class EfficientNet(nn.Module):
-    def __init__(
-        self,
-        num_classes: int,
-        freeze_backbone: bool = True,
-    ):
-        super().__init__()
-
-        self.backbone = models.efficientnet_b3(weights="IMAGENET1K_V1")
-
-        # Freeze backbone completo
-        if freeze_backbone:
-            for param in self.backbone.features.parameters():
-                param.requires_grad = False
-
-        in_features = self.backbone.classifier[1].in_features
-
-        self.backbone.classifier = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(in_features, num_classes)
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.backbone(x)
-
-    def unfreeze_last_fc(self):
-        for param in self.backbone.features[-1].parameters():
-                param.requires_grad = True
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"\nDispositivo: {device}")

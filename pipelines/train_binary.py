@@ -2,19 +2,16 @@ from pathlib import Path
 import os
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import json
 import argparse
 import time as time
 import random
-from torchvision import models
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import Transforms, H5DatasetBinary, compute_binary_metrics, extract_predictions_binary
-from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
-
-
+from src.utils import Transforms, H5DatasetBinary, compute_binary_metrics, extract_predictions_binary, folds_creation, get_dataset_split, folds_statistics
+from src.models import EfficientNet
 
 # ---------------------------
 # Configuración general universal
@@ -29,7 +26,7 @@ ROOT = Path('.')
 
 
 H5_FILES = ROOT / 'Dataset'
-H5_FILES_BINARY = ROOT / 'features_UNI'  
+H5_FILES_BINARY = ROOT / 'Dataset_multiclass'  
 IMAGE_SIZE = 256
 BATCH_SIZE = 32
 NUM_CLASSES = 1
@@ -88,7 +85,7 @@ pt_files = list(H5_FILES.glob("*.h5"))
 pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
 pt_files = np.array(pt_files)
 
-binary_files = list(H5_FILES_BINARY.glob("*.npz"))
+binary_files = list(H5_FILES_BINARY.glob("*.h5"))
 binary_files = sorted(binary_files, key=lambda f: int(f.stem.split('_')[0]))
 binary_files = np.array(binary_files)
 
@@ -101,55 +98,19 @@ train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_F
 train_files = binary_files[train_idx]
 val_files = binary_files[val_idx]
 
+
+# ---------------------------
+# Inicialización Transforms Augmentation
+# ---------------------------
+
+train_transforms, val_transforms = Transforms(IMAGE_SIZE)
+
 # ---------------------------
 # Creación Dataset
 # ---------------------------
-class NPZDatasetBinaryFeatures(Dataset):
-    def __init__(self, npz_files):
-        """
-        npz_files: lista de strings con las rutas a los archivos .npz
-        """
-        all_features = []
-        all_labels = []
-        self.index = []
-        
-        # 1. Cargamos todos los archivos .npz en memoria
-        for npz_path in npz_files:
-            data = np.load(npz_path)
-            all_features.append(data['features'])
-            all_labels.append(data['labels'])
-            
-            file_stem = Path(npz_path).stem
-            indices = data['features'].shape[0]
-            for local_idx in range(indices):
-                self.index.append((file_stem, local_idx))
-            
-        # 2. Concatenamos las listas en un solo mega-array de NumPy
-        features_np = np.concatenate(all_features, axis=0)
-        labels_np = np.concatenate(all_labels, axis=0)
-        
-        # 3. Convertimos a Tensores de PyTorch de una sola vez
-        self.features = torch.from_numpy(features_np).float()
-        self.labels = torch.from_numpy(labels_np)
 
-    def __len__(self) -> int:
-        return len(self.features)
-
-    def __getitem__(self, idx):
-        # La lectura es instantánea porque ya está en la RAM
-        feature_tensor = self.features[idx]
-        label_val = self.labels[idx].item()
-        
-        # Tu misma lógica binaria: 1.0 si es patología (>0), 0.0 si es normal (0)
-        binary_value = 1.0 if label_val > 0 else 0.0
-        
-        # Convertimos a FloatTensor escalar
-        label_tensor = torch.tensor(binary_value, dtype=torch.float32)
-
-        return feature_tensor, label_tensor
-
-train_dataset = NPZDatasetBinaryFeatures(train_files)
-val_dataset = NPZDatasetBinaryFeatures(val_files)
+train_dataset = H5DatasetBinary(train_files, transform = train_transforms)
+val_dataset = H5DatasetBinary(val_files, transform = val_transforms)
 
 
 # ---------------------------
@@ -162,8 +123,8 @@ shuffle_train = True
 #¡¡IMPORTANTE!! añadir num_workers si se usa GPU
 #Las especificaciones de num_workers puede variar segun ordenador
 
-train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, sampler = train_sampler, num_workers = 0, pin_memory=True, worker_init_fn=seed_worker, generator=g)
-val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 0, worker_init_fn=seed_worker, generator=g)
+train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, sampler = train_sampler, num_workers = 4, pin_memory=True, worker_init_fn=seed_worker, generator=g)
+val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4, worker_init_fn=seed_worker, generator=g)
 
 
 ################################
@@ -171,27 +132,6 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, n
 # Implementación Modelo + Entrenamiento
 # ---------------------------
 ################################
-
-
-# ---------------------------
-# Modelo CNN
-# ---------------------------
-class MLP(nn.Module):
-    """
-    Cabeza binaria: Detecta si el parche es Normal (0) o Patológico (1).
-    """
-    def __init__(self, input_dim=1024, num_classes=6):
-        super(MLP, self).__init__()
-        self.classifier = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Dropout(p=0.5),
-            nn.Linear(128, num_classes)
-        )
-
-    def forward(self, x):
-        return self.classifier(x)
     
 
 # =============================================================================
@@ -275,7 +215,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"\nDispositivo: {device}")
  
 scaler  = torch.amp.GradScaler("cuda")
-model   = MLP(input_dim=1024, num_classes=NUM_CLASSES).to(device)
+model   = EfficientNet(num_classes=NUM_CLASSES).to(device)
 
 loss_fn = nn.BCEWithLogitsLoss()
 
@@ -318,10 +258,13 @@ best_val_pr = 0.0
 # BUCLE DE ENTRENAMIENTO
 # =============================================================================
 
-CKPT_DIR = ROOT / 'UNI_output_binary'
+CKPT_DIR = ROOT / 'Model_output_binary'
 CKPT_DIR.mkdir(exist_ok=True)
 
 for epoch in range(1, EPOCHS + 1):
+    if epoch == 61:
+        model.unfreeze_last_fc()
+        print("Unfreeze")
     print(f"\n{'='*60}")
     print(f"  Epoch {epoch}/{EPOCHS}")
     print(f"{'='*60}")
@@ -348,7 +291,7 @@ for epoch in range(1, EPOCHS + 1):
     history['val']['pr'].append(float(val_pr))
     
     # Guardar JSON
-    with open(CKPT_DIR / f'UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
+    with open(CKPT_DIR / f'binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
         json.dump(history, f, indent=4)
  
     # Imprimir métricas
@@ -372,7 +315,7 @@ for epoch in range(1, EPOCHS + 1):
                     'image_size': IMAGE_SIZE
                 },
             }
-        ckpt_path = CKPT_DIR / f"best_UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth"
+        ckpt_path = CKPT_DIR / f"best_model_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth"
         torch.save(checkpoint, ckpt_path)
         print(f"\n Checkpoint guardado (PR-macro={val_pr:.4f})  →  {ckpt_path}")
  
@@ -383,7 +326,7 @@ for epoch in range(1, EPOCHS + 1):
  
 elapsed = time.time() - start_time
 history['time'].append(float(elapsed))
-with open(CKPT_DIR / f'UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
+with open(CKPT_DIR / f'binary_seed_{SEED}_fold_{FOLD_CONFIG}_history.json', 'w') as f:
     json.dump(history, f, indent=4)
 print(f"\n{'#'*60}")
 print(f"  Entrenamiento completado en {elapsed/60:.1f} min")
@@ -396,22 +339,21 @@ print(f"{'#'*60}")
 # INFERENCIA
 # =============================================================================
 
-best_checkpoint = torch.load(CKPT_DIR / f"best_UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
+best_checkpoint = torch.load(CKPT_DIR / f"best_model_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
 model.load_state_dict(best_checkpoint['model_state_dict'])
 model.eval()
 
 def save_to_csv(dataset_object, y_true, y_prob, split_name):
-    # Usamos el file_stem que guardamos en el nuevo Dataset
     image_ids = [
-        f"{file_stem}_patch_{local_idx}" 
-        for file_stem, local_idx in dataset_object.index
+        f"{Path(h5_path).stem}_patch_{local_idx}" 
+        for h5_path, local_idx in dataset_object.index
     ]
     data = {}
-    data["image_id"] = image_ids
-    data["y_true"] = y_true[:]
-    data["y_prob"] = y_prob[:]
+    data[f"image_id"] = image_ids
+    data[f"y_true"] = y_true[:]
+    data[f"y_prob"] = y_prob[:]
     df = pd.DataFrame(data)
-    df.to_csv(CKPT_DIR / f"predictions_UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}_{split_name}.csv", index=False)
+    df.to_csv(CKPT_DIR / f"predictions_binary_seed_{SEED}_fold{FOLD_CONFIG}_{split_name}.csv", index=False)
 
 # Extraer y guardar Validación
 print("Guardando predicciones de Validación...")

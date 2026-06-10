@@ -1,20 +1,17 @@
 from pathlib import Path
 import os
 import numpy as np
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 import json
 import pandas as pd
 import argparse
 import time as time
 import random
-from torchvision import models
 import torch
-import torch.nn as nn
 from tqdm import tqdm
-from Funciones.Augmentation_Dataloader import compute_multiclass_metrics, print_metrics_multiclass, extract_predictions_multiclass
-from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
-from Funciones.Balancing_methods import ASLSingleLabel
-
+from src.utils import NPZDatasetMulticlassFeatures, compute_multiclass_metrics, print_metrics_multiclass, extract_predictions_multiclass, folds_creation, get_dataset_split, folds_statistics
+from src.balancing_methods import ASLSingleLabel
+from src.models import MLP
 
 
 # ---------------------------
@@ -114,51 +111,6 @@ val_files = binary_files[val_idx]
 # ---------------------------
 # Creación Dataset
 # ---------------------------
-class NPZDatasetMulticlassFeatures(Dataset):
-    def __init__(self, npz_files):
-        """
-        npz_files: lista de rutas a los archivos .npz
-        """
-        all_features = []
-        all_labels = []
-        self.index = [] # Mantenemos el índice para inferencia/trazabilidad
-        
-        for npz_path in npz_files:
-            data = np.load(npz_path)
-            features = data['features']
-            labels = data['labels']
-            
-            # Filtramos solo los parches que tienen etiqueta > 0
-            # (asumiendo que 0 es 'fondo' o 'no clasificado')
-            mask = labels > 0
-            
-            # Guardamos las features y labels que pasan el filtro
-            all_features.append(features[mask])
-            all_labels.append(labels[mask])
-            
-            # Trazabilidad: Guardamos los índices originales de los parches que SÍ se usan
-            file_stem = Path(npz_path).stem
-            valid_indices = np.where(mask)[0]
-            for local_idx in valid_indices:
-                self.index.append((file_stem, local_idx))
-            
-        # Concatenamos todo en tensores en RAM
-        self.features = torch.from_numpy(np.concatenate(all_features, axis=0)).float()
-        self.labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
-        
-        # Ajuste de etiquetas: Si tus clases originales son 1-6, 
-        # restamos 1 para que sean 0-5 (compatible con nn.CrossEntropyLoss)
-        self.labels = self.labels - 1
-
-    def __len__(self) -> int:
-        return len(self.features)
-
-    def __getitem__(self, idx):
-        # Acceso directo a memoria
-        feature_tensor = self.features[idx]
-        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
-        
-        return feature_tensor, label_tensor
 
 train_dataset = NPZDatasetMulticlassFeatures(train_files)
 val_dataset = NPZDatasetMulticlassFeatures(val_files)
@@ -183,24 +135,6 @@ val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, n
 # Implementación Modelo + Entrenamiento
 # ---------------------------
 ################################
-
-
-# ---------------------------
-# Modelo CNN
-# ---------------------------
-class MLP(nn.Module):
-    """
-    Cabeza binaria: Detecta si el parche es Normal (0) o Patológico (1).
-    """
-    def __init__(self, input_dim=1024, num_classes=6):
-        super(MLP, self).__init__()
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(input_dim, num_classes)
-        )
-
-    def forward(self, x):
-        return self.classifier(x)
     
 
 # =============================================================================

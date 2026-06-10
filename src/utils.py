@@ -13,6 +13,10 @@ from pathlib import Path
 import random
 import h5py
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score, auc
+from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+import re
+import os
+import pandas as pd
 
 
 # ---------------------------
@@ -66,6 +70,121 @@ def print_split_summary(name: str, stats: dict) -> None:
     for class_name, count in stats["per_class"].items():
         pct = 100 * count / total if total > 0 else 0.0
         print(f"  [{CLASS_NAMES.index(class_name)}] {class_name:<30} {count:>8,}  ({pct:.1f}%)")
+        
+        
+# =========================
+# CREACIÓN FOLDS
+# =========================
+
+def folds_creation(H5_FILES, NUM_FOLDS, seed):
+    
+    wsi_data = []
+
+    for h5_path in H5_FILES:
+        with h5py.File(h5_path, "r") as f:
+            labels = f["labels"][:]
+            
+            # Matriz binaria de presencia
+            
+            presence_amp = np.max(labels, axis=0) 
+            
+            # Patches por clase
+            per_class_counts = labels.sum(axis=0).astype(int)
+            
+            patch_count = len(labels)
+            
+            
+            # Guardamos los datos de presencia y desglose de patches
+            wsi_entry = {
+                "archivo": os.path.basename(h5_path),
+                "total patches": patch_count,
+                "clases_presencia": presence_amp
+            }
+            
+            # Añadimos de forma dinámica una columna por cada clase con su número de patches
+            for idx_class, name_class in enumerate(CLASS_NAMES):
+                wsi_entry[name_class] = per_class_counts[idx_class]
+                
+            wsi_data.append(wsi_entry)
+
+    # Convertir a matrices limpias para el algoritmo de estratificación
+    X = np.array([d["archivo"] for d in wsi_data])
+    Y = np.array([d["clases_presencia"] for d in wsi_data])  
+
+    # Aplicar la estratificación multilabel WSI wise
+    mskf = MultilabelStratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=seed)
+    map_folds = {}
+
+    for fold_idx, (train_idx, val_idx) in enumerate(mskf.split(X, Y)):
+        for idx in val_idx:
+            map_folds[X[idx]] = fold_idx
+            
+
+    folds_files = [[] for _ in range(NUM_FOLDS)]
+    
+    # Extraemos el índice en lugar del nombre del archivo
+    for file, fold_idx in map_folds.items():
+        
+        match = re.search(r'\d+', file)
+        
+        if match:
+            numero_wsi = int(match.group())
+            idx_original = numero_wsi - 1
+            folds_files[fold_idx].append(idx_original)
+        else:
+            raise ValueError(f"No se pudo encontrar un número identificador en el archivo: {file}")
+
+    # Convertimos a arrays de NumPy para que la función de división funcione idéntica
+    folds_files = [np.array(f) for f in folds_files]
+            
+    return folds_files, wsi_data
+
+def folds_statistics(H5_FILES, folds_files, NUM_FOLDS):
+    # Estadisticas de patches por clase por fold
+    statistics_folds = np.zeros((5, 7), dtype=int)
+
+    # Numero patches por fold
+    patches_per_fold = np.zeros(5, dtype=int)
+
+    for fold in range(NUM_FOLDS):
+        for idx in folds_files[fold]:
+            with h5py.File(H5_FILES[idx], "r") as f:
+                labels = f["labels"][:]
+                
+                classes_per_wsi = np.sum(labels, axis=0)
+        
+                # Acumular en Fold correspondiente
+                statistics_folds[fold] += classes_per_wsi.astype(int)
+                patches_per_fold[fold] += len(labels)
+                
+    df_resultados = pd.DataFrame(statistics_folds, columns=CLASS_NAMES)
+    df_resultados.insert(0, "Total Patches", patches_per_fold)
+    df_resultados.index.name = "Fold ID"
+
+
+    print(df_resultados.to_string())
+
+
+def get_dataset_split(FOLD_CONFIG, folds_list, NUM_FOLDS):
+    
+    if FOLD_CONFIG < 1 or FOLD_CONFIG > 5:
+        raise ValueError("El parámetro del fold debe estar entre 1 y 5.")
+        
+    # Convertimos el parámetro (1-5) a índice de Python (0-4)
+    val_fold_idx = FOLD_CONFIG - 1
+    
+    # Asignamos Test al siguiente fold de forma circular para evaluar siempre en datos "ciegos"
+    test_fold_idx = (val_fold_idx + 1) % NUM_FOLDS
+    
+    # Los 3 folds restantes van para entrenamiento
+    train_folds_indices = [i for i in range(NUM_FOLDS) if i != val_fold_idx and i != test_fold_idx]
+    
+    # Construcción de los sets de datos
+    val_files = folds_list[val_fold_idx]
+    test_files = folds_list[test_fold_idx]
+    train_files = np.concatenate([folds_list[i] for i in train_folds_indices])
+    
+    return train_files, val_files, test_files
         
         
 # =============================================================================
@@ -367,6 +486,134 @@ class H5DatasetInferencia(Dataset):
         labels = torch.tensor(labels, dtype=torch.long)
  
         return img, labels
+    
+class NPZDatasetBinaryFeatures(Dataset):
+    def __init__(self, npz_files):
+        """
+        npz_files: lista de strings con las rutas a los archivos .npz
+        """
+        all_features = []
+        all_labels = []
+        self.index = []
+        
+        # 1. Cargamos todos los archivos .npz en memoria
+        for npz_path in npz_files:
+            data = np.load(npz_path)
+            all_features.append(data['features'])
+            all_labels.append(data['labels'])
+            
+            file_stem = Path(npz_path).stem
+            indices = data['features'].shape[0]
+            for local_idx in range(indices):
+                self.index.append((file_stem, local_idx))
+            
+        # 2. Concatenamos las listas en un solo mega-array de NumPy
+        features_np = np.concatenate(all_features, axis=0)
+        labels_np = np.concatenate(all_labels, axis=0)
+        
+        # 3. Convertimos a Tensores de PyTorch de una sola vez
+        self.features = torch.from_numpy(features_np).float()
+        self.labels = torch.from_numpy(labels_np)
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        # La lectura es instantánea porque ya está en la RAM
+        feature_tensor = self.features[idx]
+        label_val = self.labels[idx].item()
+        
+        # Tu misma lógica binaria: 1.0 si es patología (>0), 0.0 si es normal (0)
+        binary_value = 1.0 if label_val > 0 else 0.0
+        
+        # Convertimos a FloatTensor escalar
+        label_tensor = torch.tensor(binary_value, dtype=torch.float32)
+
+        return feature_tensor, label_tensor
+    
+class NPZDatasetMulticlassFeatures(Dataset):
+    def __init__(self, npz_files):
+        """
+        npz_files: lista de rutas a los archivos .npz
+        """
+        all_features = []
+        all_labels = []
+        self.index = [] # Mantenemos el índice para inferencia/trazabilidad
+        
+        for npz_path in npz_files:
+            data = np.load(npz_path)
+            features = data['features']
+            labels = data['labels']
+            
+            # Filtramos solo los parches que tienen etiqueta > 0
+            # (asumiendo que 0 es 'fondo' o 'no clasificado')
+            mask = labels > 0
+            
+            # Guardamos las features y labels que pasan el filtro
+            all_features.append(features[mask])
+            all_labels.append(labels[mask])
+            
+            # Trazabilidad: Guardamos los índices originales de los parches que SÍ se usan
+            file_stem = Path(npz_path).stem
+            valid_indices = np.where(mask)[0]
+            for local_idx in valid_indices:
+                self.index.append((file_stem, local_idx))
+            
+        # Concatenamos todo en tensores en RAM
+        self.features = torch.from_numpy(np.concatenate(all_features, axis=0)).float()
+        self.labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
+        
+        # Ajuste de etiquetas: Si tus clases originales son 1-6, 
+        # restamos 1 para que sean 0-5 (compatible con nn.CrossEntropyLoss)
+        self.labels = self.labels - 1
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        # Acceso directo a memoria
+        feature_tensor = self.features[idx]
+        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
+        
+        return feature_tensor, label_tensor
+
+class NPZDatasetInferenceFeatures(Dataset):
+    def __init__(self, npz_files):
+        """
+        npz_files: lista de rutas a los archivos .npz
+        """
+        all_features = []
+        all_labels = []
+        self.index = [] # Mantenemos el índice para inferencia/trazabilidad
+        
+        for npz_path in npz_files:
+            data = np.load(npz_path)
+            features = data['features']
+            labels = data['labels']
+            
+            # Guardamos las features y labels que pasan el filtro
+            all_features.append(features)
+            all_labels.append(labels)
+            
+            file_stem = Path(npz_path).stem
+            indices = data['features'].shape[0]
+            for local_idx in range(indices):
+                self.index.append((file_stem, local_idx))
+            
+        # Concatenamos todo en tensores en RAM
+        self.features = torch.from_numpy(np.concatenate(all_features, axis=0)).float()
+        self.labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
+        
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+    def __getitem__(self, idx):
+        # Acceso directo a memoria
+        feature_tensor = self.features[idx]
+        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
+        
+        return feature_tensor, label_tensor
 
 # ---------------------------
 # Inferencia

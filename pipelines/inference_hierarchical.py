@@ -4,17 +4,13 @@ from pathlib import Path
 import os
 import numpy as np
 import pandas as pd
-from torch.utils.data import DataLoader, Dataset
-import json
+from torch.utils.data import DataLoader
 import argparse
 import time as time
 import random
-from torchvision import models
 import torch
-import torch.nn as nn
-from sklearn.metrics import classification_report
-from Funciones.Augmentation_Dataloader import Transforms, H5DatasetInferencia
-from Funciones.KFCV_Create import folds_creation, get_dataset_split, folds_statistics
+from src.utils import Transforms, H5DatasetInferencia, folds_creation, get_dataset_split, folds_statistics
+from src.models import EfficientNet
 
 # ---------------------------
 # Configuración general universal
@@ -29,10 +25,10 @@ ROOT = Path('.')
 
 
 H5_FILES = ROOT / 'Dataset'
-H5_FILES_BINARY = ROOT / 'features_UNI'
-CKPT_DIR_BINARY = ROOT / 'UNI_output_binary'
-CKPT_DIR_MULTICLASS = ROOT / 'UNI_output_multiclass'
-CKPT_DIR = ROOT / 'UNI_output_hierarchical'
+H5_FILES_BINARY = ROOT / 'Dataset_multiclass'
+CKPT_DIR_BINARY = ROOT / 'Model_output_binary'
+CKPT_DIR_MULTICLASS = ROOT / 'Model_output_multiclass'
+CKPT_DIR = ROOT / 'Model_output_hierarchical'
 CKPT_DIR.mkdir(exist_ok=True)  
 IMAGE_SIZE = 256
 BATCH_SIZE = 32
@@ -87,6 +83,12 @@ NUM_FOLDS = 5
 FOLD_CONFIG = args.fold
 
 # ---------------------------
+# Inicialización Transforms Augmentation
+# ---------------------------
+
+train_transforms, val_transforms = Transforms(IMAGE_SIZE)
+
+# ---------------------------
 # Creación índices Dataset
 # ---------------------------
 
@@ -94,7 +96,7 @@ pt_files = list(H5_FILES.glob("*.h5"))
 pt_files = sorted(pt_files, key=lambda f: int(f.stem.split('_')[0]))
 pt_files = np.array(pt_files)
 
-binary_files = list(H5_FILES_BINARY.glob("*.npz"))
+binary_files = list(H5_FILES_BINARY.glob("*.h5"))
 binary_files = sorted(binary_files, key=lambda f: int(f.stem.split('_')[0]))
 binary_files = np.array(binary_files)
 
@@ -106,99 +108,21 @@ train_idx, val_idx, test_idx = get_dataset_split(FOLD_CONFIG, folds_files, NUM_F
 
 test_files = binary_files[test_idx]
 
-class NPZDatasetInferenceFeatures(Dataset):
-    def __init__(self, npz_files):
-        """
-        npz_files: lista de rutas a los archivos .npz
-        """
-        all_features = []
-        all_labels = []
-        self.index = [] # Mantenemos el índice para inferencia/trazabilidad
-        
-        for npz_path in npz_files:
-            data = np.load(npz_path)
-            features = data['features']
-            labels = data['labels']
-            
-            # Guardamos las features y labels que pasan el filtro
-            all_features.append(features)
-            all_labels.append(labels)
-            
-            file_stem = Path(npz_path).stem
-            indices = data['features'].shape[0]
-            for local_idx in range(indices):
-                self.index.append((file_stem, local_idx))
-            
-        # Concatenamos todo en tensores en RAM
-        self.features = torch.from_numpy(np.concatenate(all_features, axis=0)).float()
-        self.labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
-        
 
-    def __len__(self) -> int:
-        return len(self.features)
-
-    def __getitem__(self, idx):
-        # Acceso directo a memoria
-        feature_tensor = self.features[idx]
-        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
-        
-        return feature_tensor, label_tensor
-
-
-test_dataset = NPZDatasetInferenceFeatures(test_files)
+test_dataset = H5DatasetInferencia(test_files, transform=val_transforms)
 test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers = 4, worker_init_fn=seed_worker, generator=g)
-
-class MLPBinary(nn.Module):
-    """
-    Cabeza binaria: Detecta si el parche es Normal (0) o Patológico (1).
-    """
-    def __init__(self, input_dim=1024, num_classes=6):
-        super(MLPBinary, self).__init__()
-        self.classifier = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.LayerNorm(128),
-            nn.GELU(),
-            nn.Dropout(p=0.5),
-            nn.Linear(128, num_classes)
-        )
-
-    def forward(self, x):
-        return self.classifier(x)
-    
-class MLP(nn.Module):
-    """
-    Clasificador multiclase para nivel 2 jerárquico.
-    Entrada: features UNI (1024-d)
-    Salida: logits por clase patológica (6 clases)
-    """
-    def __init__(self, input_dim=1024, num_classes=6):  # ← default correcto
-        super(MLP, self).__init__()
-        self.classifier = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.LayerNorm(512),
-            nn.GELU(),
-            nn.Dropout(p=0.5),
-            nn.Linear(512, 256),
-            nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Dropout(p=0.5),
-            nn.Linear(256, num_classes)
-        )
-
-    def forward(self, x):
-        return self.classifier(x)
     
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_binary = MLPBinary(input_dim=1024, num_classes=NUM_CLASSES_B).to(device)
-best_checkpoint_binary = torch.load(CKPT_DIR_BINARY / f"best_UNI_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
+model_binary = EfficientNet(num_classes=NUM_CLASSES_B).to(device)
+best_checkpoint_binary = torch.load(CKPT_DIR_BINARY / f"best_model_binary_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
 model_binary.load_state_dict(best_checkpoint_binary['model_state_dict'])
 best_thres = best_checkpoint_binary['threshold']
 model_binary.eval()
 
-model_multiclass = MLP(input_dim=1024, num_classes=NUM_CLASSES_MULTI).to(device)
-best_checkpoint_multiclass = torch.load(CKPT_DIR_MULTICLASS / f"best_UNI_multiclass_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
+model_multiclass = EfficientNet(num_classes=NUM_CLASSES_MULTI).to(device)
+best_checkpoint_multiclass = torch.load(CKPT_DIR_MULTICLASS / f"best_model_multiclass_seed_{SEED}_fold_{FOLD_CONFIG}.pth", map_location=device)
 model_multiclass.load_state_dict(best_checkpoint_multiclass['model_state_dict'])
 model_multiclass.eval()
 
@@ -239,8 +163,8 @@ class_names = ['normal'] + SEVERITY_CLASSES
 
 def save_to_csv(y_true, y_pred, split_name, dataset_object):
     image_ids = [
-        f"{npz_path}_patch_{local_idx}" 
-        for npz_path, local_idx in dataset_object.index
+        f"{Path(h5_path).stem}_patch_{local_idx}" 
+        for h5_path, local_idx in dataset_object.index
     ]
     
     df = pd.DataFrame({
