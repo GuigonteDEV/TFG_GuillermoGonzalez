@@ -10,8 +10,8 @@ from sklearn.metrics import classification_report
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
 
 # 1. Configuración de rutas
-input_dir = ROOT / 'Model_output_hierarchical' 
-output_dir = ROOT / 'Metrics_hierarchical'
+input_dir = ROOT / 'UNI_output_hierarchical' 
+output_dir = ROOT / 'Metrics_hierarchical_UNI'
 os.makedirs(output_dir, exist_ok=True)
 
 # Buscar todos los archivos de predicciones
@@ -55,7 +55,7 @@ for file_path in csv_files:
         "metrics": report_dict
     }
     
-    json_filename = f"metrics_hierarchical_seed_{seed}_fold_{fold}.json"
+    json_filename = f"metrics_hierarchical_UNI_seed_{seed}_fold_{fold}.json"
     json_path = os.path.join(output_dir, json_filename)
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(individual_metrics, f, indent=4, ensure_ascii=False)
