@@ -78,13 +78,6 @@ def seed_worker(worker_id):
 # ---------------------------
 NUM_FOLDS = 5
 FOLD_CONFIG = args.fold
-        
-        
-################################
-# ---------------------------
-# Creación Dataloader
-# ---------------------------
-################################
 
 #Inicio cronómetro
 start_time = time.time()
@@ -132,8 +125,8 @@ val_dataset = H5DatasetMulticlass(val_files, transform = val_transforms)
 train_sampler = None
 shuffle_train = True
 
-#¡¡IMPORTANTE!! añadir num_workers si se usa GPU
-#Las especificaciones de num_workers puede variar segun ordenador
+# ¡¡IMPORTANTE!! añadir num_workers si se usa GPU
+# Las especificaciones de num_workers puede variar segun ordenador
 
 train_loader = DataLoader(train_dataset, batch_size = BATCH_SIZE, shuffle = shuffle_train, sampler = train_sampler, num_workers = 4, pin_memory=True, worker_init_fn=seed_worker, generator=g)
 val_loader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4, worker_init_fn=seed_worker, generator=g)

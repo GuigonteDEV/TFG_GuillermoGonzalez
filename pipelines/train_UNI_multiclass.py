@@ -75,13 +75,6 @@ def seed_worker(worker_id):
 # ---------------------------
 NUM_FOLDS = 5
 FOLD_CONFIG = args.fold
-        
-        
-################################
-# ---------------------------
-# Creación Dataloader
-# ---------------------------
-################################
 
 #Inicio cronómetro
 start_time = time.time()

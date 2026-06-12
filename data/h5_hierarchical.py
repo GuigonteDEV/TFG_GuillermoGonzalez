@@ -190,7 +190,7 @@ def build_h5_unified(
 
         for _, row in df.iterrows():
 
-            # ── Construir ruta de imagen ──────────────────────────────────
+            # Construir ruta de imagen
             fname = str(row[FNAME_COL]).strip()
             parts = fname.split('/')
             tail  = os.path.join(*parts[1:]) if len(parts) >= 2 else fname
@@ -200,18 +200,18 @@ def build_h5_unified(
                 missing.append(str(img_path))
                 continue
 
-            # ── Filtro de exclusión (Artefactos, etc.) ────────────────────
+            # Filtro de exclusión (Artefactos, etc.)
             if any(_safe_int(row.get(c, 0)) != 0 for c in EXCLUDE_COLUMNS):
                 excl_excluded += 1
                 continue
 
-            # ── Resolución de label unificado (0 a 6) ─────────────────────
+            # Resolución de label unificado (0 a 6)
             label = resolve_unified_label(row)
             if label is None:
                 excl_no_label += 1
                 continue
 
-            # ── Carga física de imagen ────────────────────────────────────
+            # Carga física de imagen
             try:
                 arr = load_image_as_array(img_path, target_size, force_channels)
             except Exception as e:
@@ -219,7 +219,7 @@ def build_h5_unified(
                 missing.append(str(img_path))
                 continue
 
-            # ── Escritura directa en HDF5 ─────────────────────────────────
+            # Escritura directa en HDF5
             img_ds[written] = arr
             lbl_ds[written] = label
             tx_ds[written]  = _safe_int(row.get(TOPLEFT_X_COL, 0))
@@ -228,7 +228,7 @@ def build_h5_unified(
             per_class[CLASS_NAMES[label]] += 1
             written += 1
 
-        # ── Limpieza/Ajuste de tamaño final ───────────────────────────────
+        # Limpieza/Ajuste de tamaño final
         if written == 0:
             if os.path.exists(h5_out_path):
                 os.remove(h5_out_path)
@@ -287,7 +287,7 @@ if __name__ == "__main__":
         "per_class": {cls: 0 for cls in CLASS_NAMES}
     }
 
-    # ── Bucle por slide ──────────────────────────────────────────────────────
+    # Bucle por slide
     for n_slide in range(1, 201):
         n_slide_str = str(n_slide).zfill(3)
 
@@ -317,7 +317,7 @@ if __name__ == "__main__":
             g_stats["per_class"][cls] += stats["per_class"][cls]
 
 
-    # ── Resumen global definitivo ────────────────────────────────────────────
+    # Resumen global definitivo
     print(f"\n{'#'*55}")
     print("  RESUMEN GLOBAL FINAL — DATASET UNIFICADO")
     print(f"{'#'*55}")

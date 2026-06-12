@@ -8,13 +8,11 @@ import numpy as np
 from sklearn.metrics import classification_report
 
 ROOT = Path(r'C:\Users\guigo\OneDrive\Escritorio\TFG_Biopsias\Proyecto')
-
-# 1. Configuración de rutas
 input_dir = ROOT / 'UNI_output_hierarchical' 
 output_dir = ROOT / 'Metrics_hierarchical_UNI'
 os.makedirs(output_dir, exist_ok=True)
 
-# Buscar todos los archivos de predicciones
+
 pattern = os.path.join(input_dir, "predictions_hierarchical_seed_*_fold_*_test.csv")
 csv_files = glob.glob(pattern)
 
@@ -23,7 +21,6 @@ individual_reports = []
 
 print(f"Se encontraron {len(csv_files)} archivos para procesar.\n")
 
-# 2. Iterar por cada archivo para extraer métricas detalladas
 for file_path in csv_files:
     file_name = os.path.basename(file_path)
     
@@ -39,7 +36,6 @@ for file_path in csv_files:
     df = pd.read_csv(file_path)
     
     # Generar el reporte de clasificación completo como diccionario
-    # (Ignoramos el warning si alguna clase no tiene predicciones en un fold específico)
     report_dict = classification_report(
         df['true_class'], 
         df['pred_class'], 
@@ -73,7 +69,7 @@ for file_path in csv_files:
             
     all_flat_results.append(flat_entry)
 
-# 3. Crear el Reporte Global (Cálculo de Media y STD)
+# Crear el Reporte Global (Cálculo de Media y STD)
 if all_flat_results:
     df_results = pd.DataFrame(all_flat_results)
     
@@ -114,7 +110,6 @@ if all_flat_results:
     with open(global_report_path, 'w', encoding='utf-8') as f:
         json.dump(global_report, f, indent=4, ensure_ascii=False)
         
-    # 4. Mostrar un resumen bonito en consola
     print("¡Proceso completado con éxito!")
     print(f"Resultados guardados en la carpeta: {output_dir}\n")
     print("====================== REPORTE GLOBAL (RESUMEN) ======================")

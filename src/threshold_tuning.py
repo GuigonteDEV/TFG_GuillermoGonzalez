@@ -43,11 +43,7 @@ for fold in range(1, NUM_FOLDS + 1):
                     best_thres = thresh
             
             best_thres_list.append(round(float(best_thres), 2))
-
-        # ==========================================
-        # GESTIÓN DE ARCHIVOS DE SALIDA
-        # ==========================================
-
+            
         try:
             checkpoint = torch.load(CKPT_DIR, map_location='cpu')
             

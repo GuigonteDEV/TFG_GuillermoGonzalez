@@ -78,7 +78,7 @@ for fold in range(1, NUM_FOLDS + 1):
                 for grupo, subdict in metrics_dict.items()
             }
             
-            # --- ACUMULADOR PARA EL REPORT GLOBAL ---
+            # Acumulador
             if cls not in metrics_accumulator:
                 metrics_accumulator[cls] = {grupo: {metrica: [] for metrica in metrics_dict[grupo]} for grupo in metrics_dict}
             

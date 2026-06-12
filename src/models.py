@@ -57,7 +57,7 @@ class MLP(nn.Module):
     """
     Clasificador multiclase para nivel 2 jerárquico.
     """
-    def __init__(self, input_dim=1024, num_classes=6):  # ← default correcto
+    def __init__(self, input_dim=1024, num_classes=6):  
         super(MLP, self).__init__()
         self.classifier = nn.Sequential(
             nn.Linear(input_dim, 512),

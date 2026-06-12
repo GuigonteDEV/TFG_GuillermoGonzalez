@@ -35,11 +35,11 @@ parser.add_argument('--token', type=str, required=True, help="TOKEN UNI")
 args = parser.parse_args()
 
 ROOT         = Path('.')
-H5_DIR       = ROOT / 'h5_multiclass_UNI'       # h5 generados con 224x224 bicúbico
-OUT_DIR      = ROOT / 'features_UNI'             # donde se guardan los .npz
+H5_DIR       = ROOT / 'h5_multiclass_UNI'       
+OUT_DIR      = ROOT / 'features_UNI'             
 CKPT_DIR     = ROOT / 'assets' / 'ckpts' / 'vit_large_patch16_224.dinov2.uni_mass100k'
 
-BATCH_SIZE   = 32       # ajusta según VRAM disponible (64 para 8GB, 128 para 16GB)
+BATCH_SIZE   = 32       
 NUM_WORKERS  = 4        # workers del DataLoader
 DEVICE       = 'cuda' if torch.cuda.is_available() else 'cpu'
 TOKEN = args.token
@@ -53,7 +53,6 @@ class H5Dataset(Dataset):
     def __init__(self, h5_files, transform):
         self.h5_path   = h5_path
         self.transform = transform
-        # Abrimos solo para leer el tamaño — se cierra enseguida
         with h5py.File(h5_path, 'r') as f:
             self.n_samples = f['images'].shape[0]
                 
@@ -107,7 +106,7 @@ def load_uni_model(ckpt_dir, device):
         img_size=224,
         patch_size=16,
         init_values=1e-5,
-        num_classes=0,        # sin cabeza de clasificación → devuelve embedding
+        num_classes=0,        
         dynamic_img_size=True
     )
     state_dict = torch.load(ckpt_path, map_location='cpu')
@@ -116,7 +115,7 @@ def load_uni_model(ckpt_dir, device):
     model.eval()
     model.to(device)
 
-    # Congelamos todos los parámetros — no se calculan gradientes
+    # Congelamos todos los parámetros
     for param in model.parameters():
         param.requires_grad = False
 
@@ -160,14 +159,12 @@ if __name__ == "__main__":
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Transform de normalización — sin Resize porque las imágenes ya son 224x224
-    # Parámetros oficiales de UNI (mismos que ImageNet)
     uni_normalize = transforms.Normalize(
         mean=(0.485, 0.456, 0.406),
         std=(0.229, 0.224, 0.225)
     )
 
-    # Carga del modelo una sola vez
+    # Carga del modelo
     print("="*55)
     print("Cargando modelo UNI...")
     print("="*55)
@@ -178,7 +175,7 @@ if __name__ == "__main__":
     total_patches   = 0
     total_skipped   = 0
 
-    # Bucle por slide — mismo rango que h5_Images.py
+    # Bucle por slide
     for n_slide in range(1, 201):
         n_slide_str = str(n_slide).zfill(3)
         h5_path  = H5_DIR  / f'{n_slide_str}_multiclass_UNI.h5'
@@ -188,7 +185,6 @@ if __name__ == "__main__":
         if not h5_path.exists():
             continue
 
-        # Reanudable: si el npz ya existe, saltamos este slide
         if npz_path.exists():
             print(f"[SKIP] Slide {n_slide_str} — ya procesado")
             total_skipped += 1
@@ -200,7 +196,7 @@ if __name__ == "__main__":
         dataloader = DataLoader(
             dataset,
             batch_size=BATCH_SIZE,
-            shuffle=False,          # orden preservado para correspondencia con labels
+            shuffle=False,         
             num_workers=NUM_WORKERS,
             pin_memory=(DEVICE == 'cuda')
         )

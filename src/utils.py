@@ -12,11 +12,14 @@ import numpy as np
 from pathlib import Path
 import random
 import h5py
+import timm
+from huggingface_hub import login
 from sklearn.metrics import f1_score, roc_auc_score, precision_recall_curve, average_precision_score, auc
 from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
 import re
 import os
 import pandas as pd
+from tqdm import tqdm
 
 
 # ---------------------------
@@ -260,11 +263,11 @@ def compute_binary_metrics(
     return roc_auc, pr_auc
 
 def compute_multiclass_metrics(
-    all_probs:  np.ndarray,   # Matriz Softmax:  (N, NUM_CLASSES) float
-    all_labels: np.ndarray, # Vector plano:     (N,) con enteros (0, 1, 2...)
+    all_probs:  np.ndarray,  
+    all_labels: np.ndarray, 
 ) -> tuple[float, dict]:
     """
-    Calcula de forma eficiente el F1-Macro global y el F1-Score desglosado
+    Calcula el F1-Macro global y el F1-Score desglosado
     por cada una de las patologías.
     """
     if np.isnan(all_probs).any():
@@ -348,7 +351,34 @@ def Transforms(Image_SIZE):
 
 # ---------------------------
 # Dataset H5 
-# ---------------------------    
+# ---------------------------
+
+class H5Dataset(Dataset):
+    def __init__(self, h5_path, transform):
+        self.h5_path   = h5_path
+        self.transform = transform
+        # Abrimos solo para leer el tamaño — se cierra enseguida
+        with h5py.File(h5_path, 'r') as f:
+            self.n_samples = f['images'].shape[0]
+                
+ 
+    def __len__(self) -> int:
+        return self.n_samples
+ 
+    def __getitem__(self, idx):
+        with h5py.File(self.h5_path, "r") as h5:
+            img    = h5["images"][idx]
+            coords_x = h5["topleft_x"][idx]
+            coords_y = h5["topleft_y"][idx]
+            
+        img = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
+        img = self.transform(img)
+        
+        coords_x = torch.tensor(coords_x, dtype=torch.float32)
+        coords_y = torch.tensor(coords_y, dtype=torch.float32)
+ 
+        return img, coords_x, coords_y
+    
 class H5DatasetMultilabel(Dataset):
     def __init__(self, h5_files, transform=None):
         self.transform = transform
@@ -496,7 +526,7 @@ class NPZDatasetBinaryFeatures(Dataset):
         all_labels = []
         self.index = []
         
-        # 1. Cargamos todos los archivos .npz en memoria
+        # Cargamos todos los archivos .npz en memoria
         for npz_path in npz_files:
             data = np.load(npz_path)
             all_features.append(data['features'])
@@ -507,11 +537,11 @@ class NPZDatasetBinaryFeatures(Dataset):
             for local_idx in range(indices):
                 self.index.append((file_stem, local_idx))
             
-        # 2. Concatenamos las listas en un solo mega-array de NumPy
+        # Concatenamos las listas en un solo mega-array de NumPy
         features_np = np.concatenate(all_features, axis=0)
         labels_np = np.concatenate(all_labels, axis=0)
         
-        # 3. Convertimos a Tensores de PyTorch de una sola vez
+        # Convertimos a Tensores de PyTorch de una sola vez
         self.features = torch.from_numpy(features_np).float()
         self.labels = torch.from_numpy(labels_np)
 
@@ -546,14 +576,13 @@ class NPZDatasetMulticlassFeatures(Dataset):
             labels = data['labels']
             
             # Filtramos solo los parches que tienen etiqueta > 0
-            # (asumiendo que 0 es 'fondo' o 'no clasificado')
             mask = labels > 0
             
             # Guardamos las features y labels que pasan el filtro
             all_features.append(features[mask])
             all_labels.append(labels[mask])
             
-            # Trazabilidad: Guardamos los índices originales de los parches que SÍ se usan
+            # Guardamos los índices originales de los parches que SÍ se usan
             file_stem = Path(npz_path).stem
             valid_indices = np.where(mask)[0]
             for local_idx in valid_indices:
@@ -563,17 +592,15 @@ class NPZDatasetMulticlassFeatures(Dataset):
         self.features = torch.from_numpy(np.concatenate(all_features, axis=0)).float()
         self.labels = torch.from_numpy(np.concatenate(all_labels, axis=0))
         
-        # Ajuste de etiquetas: Si tus clases originales son 1-6, 
-        # restamos 1 para que sean 0-5 (compatible con nn.CrossEntropyLoss)
+        # Ajuste de etiquetas
         self.labels = self.labels - 1
 
     def __len__(self) -> int:
         return len(self.features)
 
     def __getitem__(self, idx):
-        # Acceso directo a memoria
         feature_tensor = self.features[idx]
-        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
+        label_tensor = self.labels[idx].long() 
         
         return feature_tensor, label_tensor
 
@@ -609,9 +636,8 @@ class NPZDatasetInferenceFeatures(Dataset):
         return len(self.features)
 
     def __getitem__(self, idx):
-        # Acceso directo a memoria
         feature_tensor = self.features[idx]
-        label_tensor = self.labels[idx].long() # CrossEntropy requiere long
+        label_tensor = self.labels[idx].long() 
         
         return feature_tensor, label_tensor
 
@@ -655,3 +681,80 @@ def extract_predictions_multiclass(dataloader, model, device):
         all_labels.append(y.numpy())
     return np.concatenate(all_labels), np.concatenate(all_probs)
 
+
+# ---------------------------
+# UNI
+# ---------------------------
+
+def load_uni_model(ckpt_dir, device, TOKEN):
+    """
+    Carga UNI desde checkpoint local o lo descarga de HuggingFace.
+    Devuelve el modelo en modo eval con gradientes desactivados.
+    """
+    ckpt_path = Path(ckpt_dir) / 'pytorch_model.bin'
+
+    if not ckpt_path.exists():
+        print("Checkpoint no encontrado localmente. Descargando de HuggingFace...")
+        if TOKEN is not None:
+            login(token=TOKEN)
+        else:
+            login()  # pide token interactivamente si no está cacheado
+        from huggingface_hub import hf_hub_download
+        Path(ckpt_dir).mkdir(parents=True, exist_ok=True)
+        hf_hub_download(
+            "MahmoodLab/UNI",
+            filename="pytorch_model.bin",
+            local_dir=str(ckpt_dir),
+            force_download=False
+        )
+    else:
+        print(f"Checkpoint encontrado en {ckpt_path}")
+
+    model = timm.create_model(
+        "vit_large_patch16_224",
+        img_size=224,
+        patch_size=16,
+        init_values=1e-5,
+        num_classes=0,        # sin cabeza de clasificación → devuelve embedding
+        dynamic_img_size=True
+    )
+    state_dict = torch.load(ckpt_path, map_location='cpu')
+    model.load_state_dict(state_dict, strict=True)
+
+    model.eval()
+    model.to(device)
+
+    # Congelamos todos los parámetros — no se calculan gradientes
+    for param in model.parameters():
+        param.requires_grad = False
+
+    print(f"UNI cargado en {device} | Parámetros: {sum(p.numel() for p in model.parameters()):,}")
+    return model
+
+
+def extract_features(model, dataloader, device):
+    """
+    Pasa todos los batches por UNI y acumula features y labels.
+    Devuelve arrays numpy: features (N, 1024), labels (N,1)
+    """
+    all_features = []
+    all_coords_x = []
+    all_coords_y = []
+
+    with torch.no_grad():
+        for imgs, coords_x, coords_y in tqdm(dataloader, desc="  Extrayendo", leave=False, disable=False):
+            imgs = imgs.to(device)
+
+            # Forward pass — num_classes=0 devuelve el CLS token: (B, 1024)
+            feats = model(imgs)
+
+            all_features.append(feats.cpu().numpy())
+            all_coords_x.append(coords_x.numpy())
+            all_coords_y.append(coords_y.numpy())
+
+    features = np.concatenate(all_features, axis=0).astype(np.float32)
+    features = torch.from_numpy(features)
+    topleft_x = np.concatenate(all_coords_x, axis=0).astype(np.float32)
+    topleft_y = np.concatenate(all_coords_y, axis=0).astype(np.float32)
+
+    return features, topleft_x, topleft_y

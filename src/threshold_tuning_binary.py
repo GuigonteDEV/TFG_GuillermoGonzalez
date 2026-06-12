@@ -39,11 +39,7 @@ for fold in range(1, NUM_FOLDS + 1):
                 r_opt = recall_score(y_true, y_pred_temporal, zero_division=0)
         
         best_thres = round(float(best_thres), 2)
-
-        # ==========================================
-        # GESTIÓN DE ARCHIVOS DE SALIDA
-        # ==========================================
-
+        
         try:
             checkpoint = torch.load(CKPT_DIR, map_location='cpu')
             
