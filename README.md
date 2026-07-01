@@ -132,9 +132,8 @@ Tras ejecutar el proceso completo, el sistema genera una imagen donde se represe
 
 ## Resultado obtenido
 
-```markdown
-![Resultado final](./map_biopsy_148_UNI.png)
-```
+![Resultado final](map_biopsy_148_UNI.png)
+
 
 ---
 
