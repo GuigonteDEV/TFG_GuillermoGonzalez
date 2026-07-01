@@ -132,10 +132,8 @@ Tras ejecutar el proceso completo, el sistema genera una imagen donde se represe
 
 ## Resultado obtenido
 
-> Sustituir la ruta por la ubicación real de la imagen dentro del repositorio.
-
 ```markdown
-![Resultado final](map_biopsy_148_UNI.png)
+![Resultado final](./map_biopsy_148_UNI.png)
 ```
 
 ---
