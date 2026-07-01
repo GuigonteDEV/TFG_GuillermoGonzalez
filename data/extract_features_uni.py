@@ -1,18 +1,3 @@
-"""
-extract_features_UNI.py
-=======================
-Extrae features de UNI (ViT-L/16, extractor congelado) a partir de los
-archivos .h5 generados por h5_Images.py y las guarda en archivos .npz.
-
-Formato de salida por archivo .npz
-------------------------------------
-  features : float32  (N, 1024)  — embedding CLS token de UNI
-"""
-
-# ---------------------------------------------------------------------------
-# IMPORTS
-# ---------------------------------------------------------------------------
-
 import os
 from pathlib import Path
 import argparse
@@ -27,7 +12,7 @@ from tqdm import tqdm
 
 
 # ---------------------------------------------------------------------------
-# CONFIGURACIÓN — ajusta estas rutas
+# CONFIGURACIÓN 
 # ---------------------------------------------------------------------------
 
 parser = argparse.ArgumentParser(description="Entrenamiento Biopsias HTCondor")
@@ -46,7 +31,7 @@ TOKEN = args.token
 
 
 # ---------------------------------------------------------------------------
-# DATASET — lee imágenes y labels desde un h5
+# DATASET 
 # ---------------------------------------------------------------------------
     
 class H5Dataset(Dataset):

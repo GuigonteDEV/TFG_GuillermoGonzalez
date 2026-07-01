@@ -208,11 +208,11 @@ with h5py.File(h5_path, "r") as h5:
 
 # Configuración colores personalizados
 colores_patologias_rgba = [
-    [0.00, 0.80, 1.00, 0.45], # 1: inflammation
-    [0.15, 0.85, 0.00, 0.45], # 2: lowgrade_dysplasia
-    [1.00, 0.80, 0.00, 0.50], # 3: highgrade_dysplasia
+    [0.00, 0.80, 1.00, 0.55], # 1: inflammation
+    [0.15, 0.85, 0.00, 0.50], # 2: lowgrade_dysplasia
+    [1.00, 1.00, 0.00, 0.55], # 3: highgrade_dysplasia
     [0.35, 0.35, 0.35, 0.65], # 4: tumor_necrosis
-    [1.00, 0.40, 0.00, 0.50], # 5: suspicious_for_invasion
+    [1.00, 0.40, 0.00, 0.55], # 5: suspicious_for_invasion
     [0.90, 0.00, 0.10, 0.55]  # 6: adenocarcinoma
 ]
 cmap_diagnostico = ListedColormap(colores_patologias_rgba)
@@ -238,14 +238,14 @@ sc1 = axes[0].imshow(grid_preds,
                     interpolation='nearest', 
                     aspect='equal')
 
-axes[0].set_title('Mapa de Patologías sobre Biopsia\n', fontsize=16, fontweight='bold')
-axes[0].set_xlabel('Coordenada X', fontsize=14)
-axes[0].set_ylabel('Coordenada Y', fontsize=14)
+axes[0].set_title('Mapa de Patologías sobre Biopsia\n', fontsize=18, fontweight='bold')
+axes[0].set_xlabel('Coordenada X', fontsize=18)
+axes[0].set_ylabel('Coordenada Y', fontsize=18)
 axes[0].grid(False)
 
 # Configurar barra de colores
 cbar1 = fig.colorbar(sc1, ax=axes[0], ticks=range(1, 7), shrink=0.75, pad=0.03)
-cbar1.ax.set_yticklabels(MAP_IDX, fontsize=14)
+cbar1.ax.set_yticklabels(MAP_IDX, fontsize=16)
 cbar1.outline.set_visible(False)
 
 
@@ -260,14 +260,14 @@ sc2 = axes[1].imshow(grid_unc,
                     alpha=0.50, 
                     aspect='equal')
 
-axes[1].set_title('Distribución de la Incertidumbre del Ensemble\n', fontsize=16, fontweight='bold')
-axes[1].set_xlabel('Coordenada X', fontsize=14)
-axes[1].set_ylabel('Coordenada Y', fontsize=14)
+axes[1].set_title('Distribución de la Incertidumbre del Ensemble\n', fontsize=18, fontweight='bold')
+axes[1].set_xlabel('Coordenada X', fontsize=18)
+axes[1].set_ylabel('Coordenada Y', fontsize=18)
 axes[1].grid(False)
 
 # Configurar barra de colores
 cbar2 = fig.colorbar(sc2, ax=axes[1], shrink=0.75, pad=0.03)
-cbar2.set_label('Incertidumbre (Desviación Estándar entre Modelos)', fontsize=14)
+cbar2.set_label('Incertidumbre (Desviación Estándar entre Modelos)', fontsize=18)
 cbar2.outline.set_visible(False)
 
 # Guardar y cerrar

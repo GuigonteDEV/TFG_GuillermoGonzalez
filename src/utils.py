@@ -1,9 +1,3 @@
-'''Organización del dataset en train y validation, en primera instancia se hace en script a parte para
-organizar mejor. Se probaran dos métodos, con probabilidad de leakage y sin probabilidad de leakage.
-
-Paso importante previo al desarrollo de la red neuronal.'''
-
-
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -553,7 +547,7 @@ class NPZDatasetBinaryFeatures(Dataset):
         feature_tensor = self.features[idx]
         label_val = self.labels[idx].item()
         
-        # Tu misma lógica binaria: 1.0 si es patología (>0), 0.0 si es normal (0)
+        # Lógica binaria: 1.0 si es patología (>0), 0.0 si es normal (0)
         binary_value = 1.0 if label_val > 0 else 0.0
         
         # Convertimos a FloatTensor escalar

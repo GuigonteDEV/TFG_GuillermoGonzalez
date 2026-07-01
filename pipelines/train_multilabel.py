@@ -403,7 +403,7 @@ best_checkpoint = torch.load(CKPT_DIR / f"best_model_seed_{SEED}_fold_{FOLD_CONF
 model.load_state_dict(best_checkpoint['model_state_dict'])
 model.eval()
 
-# Definimos Dataloader de test (que no estaba en tu main.py)
+# Definimos Dataloader de test
 test_files = pt_files[test_idx]
 test_dataset = H5DatasetMultilabel(test_files, transform=val_transforms)
 test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers = 4, worker_init_fn=seed_worker, generator=g)

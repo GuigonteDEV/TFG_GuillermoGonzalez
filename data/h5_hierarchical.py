@@ -1,25 +1,3 @@
-"""
-h5_levels.py
-=========================
-Genera un único conjunto unificado de archivos HDF5 para un pipeline jerárquico.
-Reduce a la mitad el uso de almacenamiento y el tiempo de procesamiento.
-
-Formato de salida por archivo .h5 unificado
-----------------------------------------------------
-  images     : uint8  (N, H, W, 3)
-  labels     : uint8  (N,)            — índice en CLASS_NAMES (0-6)
-  topleft_x  : int32  (N,)
-  topleft_y  : int32  (N,)
-  Atributos  : class_names = CLASS_NAMES
-
-Exclusiones (se descartan por completo):
-  artifact, resection_edge, lymphovascular_invasion → patch descartado
-"""
-
-# ---------------------------------------------------------------------------
-# IMPORTS
-# ---------------------------------------------------------------------------
-
 import os
 from pathlib import Path
 import pandas as pd
@@ -42,7 +20,7 @@ CLASS_NAMES = [
     'adenocarcinoma',          # 6 — mayor riesgo
 ]
 
-# Mapa clase → índice unificado (búsqueda O(1))
+# Mapa clase -> índice unificado (búsqueda O(1))
 UNIFIED_INDEX: dict[str, int] = {cls: i for i, cls in enumerate(CLASS_NAMES)}
 
 # Columnas que provocan el descarte TOTAL del patch si son != 0
